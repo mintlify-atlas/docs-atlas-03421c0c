@@ -1,0 +1,127 @@
+{
+  "projectType": "saas",
+  "projectName": "Borg UI",
+  "projectDescription": "A modern web interface for managing Borg Backup with automated scheduling and monitoring.",
+  "theme": "aspen",
+  "primaryColor": "#10b981",
+  "lightColor": "#34d399",
+  "darkColor": "#059669",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/repositories",
+              "features/backups",
+              "features/archives",
+              "features/scheduling",
+              "features/notifications"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/environment-variables",
+              "configuration/docker-compose",
+              "configuration/ssh-keys",
+              "configuration/cache"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/first-backup",
+              "guides/remote-repositories",
+              "guides/backup-scripts",
+              "guides/restore-files",
+              "guides/scheduling-backups"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/docker",
+              "deployment/docker-compose",
+              "deployment/unraid",
+              "deployment/reverse-proxy"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "advanced/security",
+              "advanced/performance",
+              "advanced/troubleshooting",
+              "advanced/maintenance"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/introduction",
+              "api/authentication"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/repositories",
+              "api/backups",
+              "api/archives",
+              "api/schedules",
+              "api/notifications",
+              "api/ssh-keys",
+              "api/system"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Live backup progress tracking with detailed metrics",
+    "Archive browser with Redis caching (600x faster)",
+    "Repository management (local, SSH, SFTP)",
+    "Visual cron scheduler with execution history",
+    "Pre/post backup hooks for custom scripts",
+    "Notifications via 100+ services (Apprise)",
+    "SSH key management and deployment",
+    "Real-time monitoring and health checks",
+    "Multi-platform Docker support (amd64, arm64, armv7)",
+    "User authentication and security"
+  ],
+  "publicApiSurface": [
+    "POST /api/auth/login",
+    "GET /api/dashboard",
+    "POST /api/backup/create",
+    "GET /api/repositories",
+    "POST /api/repositories",
+    "GET /api/archives",
+    "GET /api/browse/{repository_id}/{archive_name}",
+    "POST /api/restore",
+    "POST /api/schedule",
+    "GET /api/schedule",
+    "POST /api/notifications",
+    "GET /api/ssh-keys",
+    "POST /api/ssh-keys",
+    "GET /api/system/info",
+    "GET /api/metrics",
+    "GET /api/events/stream"
+  ]
+}
