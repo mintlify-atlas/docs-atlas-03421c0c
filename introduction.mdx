@@ -1,0 +1,225 @@
+---
+title: Introduction
+description: A modern web interface for Borg Backup with zero-configuration deployment
+---
+
+<img
+  className="block dark:hidden"
+  src="https://github.com/user-attachments/assets/69b9330f-81fc-47bd-8f11-672da6ac0d31"
+  alt="Borg UI Logo"
+  width="300"
+/>
+<img
+  className="hidden dark:block"
+  src="https://github.com/user-attachments/assets/69b9330f-81fc-47bd-8f11-672da6ac0d31"
+  alt="Borg UI Logo"
+  width="300"
+/>
+
+# Welcome to Borg UI
+
+A modern web interface for [Borg Backup](https://borgbackup.readthedocs.io/) with **zero-configuration deployment** - just run and go.
+
+<CardGroup cols={2}>
+  <Card
+    title="Quick Start"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Get up and running in minutes with Docker
+  </Card>
+  <Card
+    title="Installation Guide"
+    icon="server"
+    href="/installation"
+  >
+    Detailed setup for Docker Compose, Portainer, and Unraid
+  </Card>
+  <Card
+    title="Usage Guide"
+    icon="book"
+    href="/usage-guide"
+  >
+    Create your first backup and explore features
+  </Card>
+  <Card
+    title="Configuration"
+    icon="gear"
+    href="/configuration"
+  >
+    Customize environment variables and settings
+  </Card>
+</CardGroup>
+
+## What is Borg UI?
+
+Borg UI provides a powerful, intuitive web interface for managing your Borg Backup infrastructure. Whether you're backing up a home server or managing enterprise backups, Borg UI simplifies backup creation, monitoring, and restoration with real-time progress tracking and automated scheduling.
+
+<img
+  src="https://github.com/user-attachments/assets/3e9c7ae6-1507-4fe1-8f8b-8231a458bca0"
+  alt="Modern Dashboard"
+  width="800"
+/>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Backup Management" icon="clock-rotate-left">
+    Create, schedule, and monitor backups with live progress tracking showing current file, speed, and completion percentage
+  </Card>
+  <Card title="Archive Browser" icon="folder-tree">
+    Browse and restore files from any backup archive with Redis caching providing 600x faster performance for large repositories
+  </Card>
+  <Card title="Repository Management" icon="database">
+    Support for local, SSH, and SFTP repositories with multiple encryption and compression options (lz4, zstd, zlib, lzma)
+  </Card>
+  <Card title="Visual Scheduling" icon="calendar">
+    Visual cron job builder with execution history and multi-repository backup support
+  </Card>
+  <Card title="Pre/Post Backup Hooks" icon="code">
+    Run custom scripts before/after backups (e.g., stop Docker containers, create database dumps)
+  </Card>
+  <Card title="Smart Notifications" icon="bell">
+    Get alerts via 100+ services powered by Apprise: Email, Slack, Discord, Telegram, Pushover, Microsoft Teams, and more
+  </Card>
+  <Card title="SSH Key Management" icon="key">
+    Generate, import, and deploy SSH keys for remote repositories directly from the UI
+  </Card>
+  <Card title="Real-time Monitoring" icon="chart-line">
+    Live backup progress, system metrics, health checks, and activity feed at a glance
+  </Card>
+</CardGroup>
+
+## Features in Action
+
+### Live Backup Progress
+
+Watch your backups execute in real-time with detailed progress tracking:
+- Current file being processed
+- Backup speed (MB/s)
+- Data statistics (original, compressed, deduplicated sizes)
+- Estimated time remaining
+- Overall completion percentage
+
+<img
+  src="https://github.com/user-attachments/assets/de7e870a-2db9-4384-be71-59e8bdd67373"
+  alt="Real-time backup progress"
+  width="800"
+/>
+
+### Repository Management
+
+Create and manage repositories with an intuitive wizard:
+- Local storage, SSH, and SFTP connections
+- Encryption options: repokey, keyfile
+- Compression algorithms: lz4, zstd, zlib, lzma, auto, obfuscate
+- Source directories and exclude patterns
+- Custom borg flags
+- Import existing repositories or create new ones
+
+<img
+  src="https://github.com/user-attachments/assets/bddfae3c-4bd6-473f-aa5e-5e2cf3d54f4b"
+  alt="Repository details"
+  width="800"
+/>
+
+### Smart Notifications
+
+Get instant alerts for backup events via 100+ notification services:
+- Configure per-repository notification preferences
+- Customizable templates for backup start, success, failure, and warnings
+- Popular integrations: Email, Slack, Discord, Telegram, Pushover, Microsoft Teams
+
+<img
+  src="https://github.com/user-attachments/assets/1ae11394-d4d1-4fc8-b501-965dd5bc9743"
+  alt="Notification settings"
+  width="800"
+/>
+
+### Schedule Management
+
+Create and manage automated backup schedules:
+- Visual cron builder for easy scheduling
+- Multi-repository backup support
+- Pre/post script execution
+- Automatic pruning and compacting
+- Detailed execution history and logs
+
+<img
+  src="https://github.com/user-attachments/assets/ab824ea3-afca-4872-85b9-77781e393b97"
+  alt="Schedule management"
+  width="800"
+/>
+
+## Multi-Platform Support
+
+Borg UI supports multiple architectures:
+- **amd64** - Intel/AMD 64-bit processors
+- **arm64** - ARM 64-bit processors (Raspberry Pi 4, Apple Silicon)
+- **armv7** - ARM 32-bit processors (Raspberry Pi 3)
+
+## Technology Stack
+
+Built with modern, reliable technologies:
+- [Borg Backup](https://borgbackup.readthedocs.io/) - Deduplicating backup program
+- [FastAPI](https://fastapi.tiangolo.com/) - High-performance Python web framework
+- [React](https://react.dev/) - Modern frontend library
+- [Material-UI](https://mui.com/) - Beautiful UI components
+- [Redis](https://redis.io/) - High-performance caching
+
+<Note>
+  **Default Credentials**: When you first access Borg UI at `http://localhost:8081`, use:
+  - Username: `admin`
+  - Password: `admin123`
+  
+  You'll be prompted to change the password on first login.
+</Note>
+
+## Getting Started
+
+<CardGroup cols={2}>
+  <Card
+    title="Quick Start Guide"
+    icon="bolt"
+    href="/quickstart"
+  >
+    Get your first backup running in under 5 minutes
+  </Card>
+  <Card
+    title="Installation Guide"
+    icon="download"
+    href="/installation"
+  >
+    Detailed installation for all platforms
+  </Card>
+</CardGroup>
+
+## Community & Support
+
+<CardGroup cols={3}>
+  <Card
+    title="Discord Community"
+    icon="discord"
+    href="https://discord.gg/5KfVa5QkdQ"
+  >
+    Get help, share your setup, suggest features
+  </Card>
+  <Card
+    title="GitHub Issues"
+    icon="github"
+    href="https://github.com/karanhudia/borg-ui/issues"
+  >
+    Report bugs and request features
+  </Card>
+  <Card
+    title="Docker Hub"
+    icon="docker"
+    href="https://hub.docker.com/r/ainullcode/borg-ui"
+  >
+    Pull the latest images
+  </Card>
+</CardGroup>
+
+## License
+
+Borg UI is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). This ensures the software remains open source and any modifications are shared with the community.

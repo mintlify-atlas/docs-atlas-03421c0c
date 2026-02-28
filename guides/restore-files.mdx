@@ -1,0 +1,526 @@
+---
+title: 'Restoring Files from Archives'
+description: 'Browse backup archives and restore files to local or remote destinations'
+---
+
+## Overview
+
+Borg UI provides an intuitive interface for browsing backup archives and restoring files. With 600x faster performance through Redis caching, you can quickly navigate large backup archives and restore exactly what you need.
+
+## Quick Restore
+
+For simple file restoration:
+
+<Steps>
+  <Step title="Navigate to Repository">
+    Go to **Repositories** and select the repository containing your backups.
+  </Step>
+
+  <Step title="Browse Archives">
+    Click the **Archives** tab to see all backup archives, sorted by date.
+
+    Each archive shows:
+    - Archive name (usually with timestamp)
+    - Creation date and time
+    - Number of files
+    - Archive size (compressed and deduplicated)
+  </Step>
+
+  <Step title="Explore Archive Contents">
+    Click **Browse** on the archive you want to restore from.
+
+    The file browser displays:
+    - **Directories**: Navigate through folder structure
+    - **Files**: View individual files with sizes
+    - **Path breadcrumbs**: Easy navigation to parent folders
+  </Step>
+
+  <Step title="Select Files to Restore">
+    - Click checkboxes next to files/folders to restore
+    - Select individual files or entire directories
+    - Multiple selections are supported
+
+    <Tip>
+    Directory sizes are calculated recursively, showing total space needed.
+    </Tip>
+  </Step>
+
+  <Step title="Choose Destination">
+    Click **Restore** and configure:
+
+    - **Destination Type**: Local or SSH
+    - **Destination Path**: Where to restore files
+    - **Dry Run**: Preview what would be restored (optional)
+  </Step>
+
+  <Step title="Start Restore">
+    Click **Start Restore** to begin the operation.
+
+    A restore job is created and runs in the background.
+  </Step>
+</Steps>
+
+## Restore Destinations
+
+### Local Restore
+
+Restore files to the Borg UI server:
+
+```plaintext
+Destination Type: Local
+Destination Path: /local/restore/2024-01-15
+```
+
+<Note>
+Use `/local/` prefix to restore to host filesystem. This maps to the root of your host machine.
+</Note>
+
+**Example:**
+- Container path: `/local/home/user/restored`
+- Host path: `/home/user/restored`
+
+### Remote Restore (SSH)
+
+Restore files directly to a remote server:
+
+```plaintext
+Destination Type: SSH
+SSH Connection: [Select from configured connections]
+Destination Path: /home/user/restored-files
+```
+
+<Warning>
+Restoring from SSH repository to SSH destination is not supported. This would require downloading and re-uploading all data. Restore to local first, then transfer if needed.
+</Warning>
+
+### Supported Restore Combinations
+
+| Repository Type | Destination | Supported |
+|----------------|-------------|----------|
+| Local → Local | ✅ Direct extraction |
+| Local → SSH | ✅ Extract and upload |
+| SSH → Local | ✅ Download and extract |
+| SSH → SSH | ❌ Not supported |
+
+## Advanced Restore Options
+
+### Dry Run Mode
+
+Preview the restore operation without actually extracting files:
+
+1. Select files to restore
+2. Enable **Dry Run** checkbox
+3. Click **Start Restore**
+4. Review the preview showing:
+   - Files that would be extracted
+   - Destination paths
+   - Total size
+   - Any potential conflicts
+
+<Tip>
+Use dry run to verify the restore operation before committing, especially for large restores.
+</Tip>
+
+### Partial Restore
+
+Restore specific files or directories instead of entire archives:
+
+**By Path Pattern:**
+```bash
+# Restore all PDF files
+*.pdf
+
+# Restore specific directory
+home/user/documents/
+
+# Restore multiple patterns
+*.pdf
+*.docx
+home/user/photos/2024/
+```
+
+**By File Selection:**
+- Navigate through archive browser
+- Select individual files or directories
+- Borg extracts only selected items
+
+### Restore Permissions
+
+By default, Borg preserves:
+- File permissions (chmod)
+- Ownership (chown) - if run as root
+- Extended attributes
+- ACLs (if supported)
+
+<Note>
+If restoring as non-root user, ownership restoration may fail. Files will be owned by the user running Borg UI.
+</Note>
+
+## Monitoring Restore Progress
+
+Borg UI provides real-time restore progress tracking:
+
+### Progress Indicators
+
+- **Files Restored**: Count of extracted files
+- **Current File**: Path being processed
+- **Progress Percentage**: Overall completion
+- **Restore Speed**: Transfer rate in MB/s
+- **Estimated Time**: Remaining duration
+
+### Viewing Restore Jobs
+
+1. Navigate to **Restore Jobs** in the sidebar
+2. See all restore operations:
+   - **Pending**: Queued for execution
+   - **Running**: Currently extracting
+   - **Completed**: Finished successfully
+   - **Failed**: Encountered errors
+   - **Cancelled**: Manually stopped
+
+3. Click a job to view:
+   - Detailed progress
+   - Source repository and archive
+   - Destination path
+   - Error logs (if failed)
+
+### Cancelling Restores
+
+To stop a running restore:
+
+1. Go to **Restore Jobs**
+2. Find the running job
+3. Click **Cancel**
+4. Partial extraction is preserved
+
+<Warning>
+Cancelled restores leave partially extracted files. You may need to clean up the destination directory.
+</Warning>
+
+## Archive Caching
+
+Borg UI uses Redis to cache archive contents for 600x faster browsing:
+
+### How It Works
+
+1. **First Browse**: Borg lists all files, Borg UI caches them in Redis
+2. **Subsequent Browses**: Instant loading from cache
+3. **Cache Duration**: 24 hours (configurable)
+4. **Auto-Refresh**: Cache updates after new backups
+
+### Cache Benefits
+
+- **Speed**: Millisecond response vs. seconds for large archives
+- **Reduced Load**: No repeated Borg commands
+- **Better UX**: Instant navigation through directories
+
+<Tip>
+For archives with millions of files, the first browse may take 30-60 seconds. Subsequent browses are instant.
+</Tip>
+
+### Cache Management
+
+Caches are automatically managed, but you can manually control them:
+
+**Disable Redis Caching:**
+```yaml
+services:
+  borg-ui:
+    environment:
+      - REDIS_ENABLED=false
+```
+
+**Adjust Cache TTL:**
+```yaml
+environment:
+  - REDIS_TTL=86400  # 24 hours (default)
+```
+
+## Restore Strategies
+
+### Full Repository Restore
+
+Restore all files from the most recent archive:
+
+1. Select the latest archive
+2. Browse to root directory
+3. Select the top-level directory
+4. Choose destination path
+5. Start restore
+
+<Note>
+Full restores can take hours depending on data size and network speed.
+</Note>
+
+### Incremental Restore
+
+Restore multiple versions of the same file:
+
+1. Browse different archives
+2. Restore the same file path from each
+3. Compare versions
+4. Keep the desired version
+
+**Example Use Case:**
+- Accidentally deleted paragraph from document
+- Browse last 7 days of archives
+- Restore document from each day
+- Find version with the missing content
+
+### Point-in-Time Restore
+
+Restore files from a specific date/time:
+
+1. Identify the archive closest to target time
+2. Browse that archive
+3. Restore needed files
+4. Verify timestamps match expectations
+
+### Selective Restore
+
+Restore only specific file types or directories:
+
+**Scenario: Recover all photos from last month**
+
+1. Browse archive from end of month
+2. Navigate to photos directory
+3. Select all subdirectories
+4. Restore to staging location
+5. Verify before moving to production
+
+## Common Restore Scenarios
+
+### Accidental File Deletion
+
+<Steps>
+  <Step title="Identify When File Was Deleted">
+    Check recent archives to find the last one containing the file.
+  </Step>
+
+  <Step title="Browse That Archive">
+    Navigate to the file's original location in the archive browser.
+  </Step>
+
+  <Step title="Restore File">
+    Select the file and restore to original or temporary location.
+  </Step>
+
+  <Step title="Verify Restoration">
+    Check the restored file is correct and uncorrupted.
+  </Step>
+</Steps>
+
+### Ransomware Recovery
+
+<Steps>
+  <Step title="Stop the Attack">
+    Disconnect affected systems from network immediately.
+  </Step>
+
+  <Step title="Identify Clean Archive">
+    Find the last archive before ransomware infection.
+
+    <Warning>
+    Do not restore from infected archives. Verify archive dates carefully.
+    </Warning>
+  </Step>
+
+  <Step title="Restore to Clean System">
+    - Deploy fresh OS on new hardware/VM
+    - Restore data from clean archive
+    - Verify no malware present
+  </Step>
+
+  <Step title="Update Security">
+    - Patch systems
+    - Change passwords
+    - Enable MFA
+    - Review security policies
+  </Step>
+</Steps>
+
+<Note>
+Always restore to a quarantined environment first. Verify data integrity before moving to production.
+</Note>
+
+### Hardware Failure Recovery
+
+<Steps>
+  <Step title="Replace Failed Hardware">
+    Install new drive/system with fresh OS.
+  </Step>
+
+  <Step title="Mount Backup Repository">
+    - For local repos: Mount backup drive
+    - For remote repos: Configure SSH connection
+  </Step>
+
+  <Step title="Full Restore">
+    Restore all files from most recent archive.
+  </Step>
+
+  <Step title="Verify System">
+    - Check critical files present
+    - Test applications
+    - Verify data integrity
+  </Step>
+</Steps>
+
+### Configuration Rollback
+
+<Steps>
+  <Step title="Browse Archives">
+    Find archive from before configuration change.
+  </Step>
+
+  <Step title="Restore Config Files">
+    Restore only configuration directories (e.g., `/etc`, `/local/config`).
+  </Step>
+
+  <Step title="Apply Restored Config">
+    - Review changes
+    - Merge with current config if needed
+    - Restart affected services
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+### Restore Fails with Permission Denied
+
+**Problem**: Cannot write to destination directory.
+
+**Solution**:
+```bash
+# On host machine
+sudo chown -R 1000:1000 /path/to/restore/destination
+```
+
+Or restore to `/data/` inside container:
+```plaintext
+Destination: /data/restored-files
+```
+
+### Archive Browser Shows No Files
+
+**Problem**: Cache is empty or corrupt.
+
+**Solution**:
+1. Refresh the archive list
+2. Clear Redis cache:
+   ```bash
+   docker exec borg-ui-redis redis-cli FLUSHDB
+   ```
+3. Browse archive again to rebuild cache
+
+### Restore Speed is Slow
+
+**Possible Causes**:
+- **Remote repository**: Network bandwidth limit
+- **Large files**: Compression/decompression overhead
+- **Disk I/O**: Slow destination disk
+
+**Optimizations**:
+- Use local restore destination when possible
+- Restore during off-peak hours
+- Consider restoring to SSD instead of HDD
+
+### Partial Restore Corruption
+
+**Problem**: Some files are corrupt after restore.
+
+**Check Repository Integrity**:
+```bash
+docker exec borg-ui borg check /path/to/repository
+```
+
+If check fails, repair may be possible:
+```bash
+borg check --repair /path/to/repository
+```
+
+<Warning>
+Repository repair can take hours and may result in data loss. Always have multiple backup copies.
+</Warning>
+
+### Cannot Restore to SSH Destination
+
+**Problem**: SSH restore fails or hangs.
+
+**Verify SSH Connection**:
+1. Test connection: **SSH Connections** → **Test**
+2. Check storage space on remote server
+3. Verify write permissions on destination path
+
+**Check Logs**:
+1. Navigate to restore job details
+2. View error messages
+3. Common issues:
+   - SSH key authentication failure
+   - Insufficient disk space
+   - Path doesn't exist
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Test Restores Regularly">
+    - Schedule periodic restore tests
+    - Verify data integrity
+    - Document restore procedures
+    - Train staff on restore process
+
+    <Tip>
+    Untested backups are not backups. Restore testing should be part of your backup strategy.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="Use Dry Run First">
+    Always preview restores with dry run:
+    - Large restores
+    - Production systems
+    - Unfamiliar archive layouts
+    - When unsure about destination path
+  </Accordion>
+
+  <Accordion title="Restore to Staging First">
+    For critical restores:
+    1. Restore to temporary/staging location
+    2. Verify data integrity
+    3. Test functionality
+    4. Move to production only after validation
+
+    Never restore directly to production without verification.
+  </Accordion>
+
+  <Accordion title="Document Recovery Procedures">
+    Maintain runbooks for common scenarios:
+    - Accidental deletion
+    - Ransomware
+    - Hardware failure
+    - Configuration rollback
+
+    Include:
+    - Step-by-step instructions
+    - Required access credentials
+    - Testing procedures
+    - Rollback plans
+  </Accordion>
+
+  <Accordion title="Monitor Restore Jobs">
+    - Check restore job status
+    - Review logs for warnings
+    - Verify disk space during restore
+    - Set up alerts for failed restores
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Schedule Backups" icon="clock" href="/guides/scheduling-backups">
+    Automate backups to ensure fresh restore points
+  </Card>
+  <Card title="Backup Verification" icon="check" href="/features/maintenance">
+    Set up automated backup integrity checks
+  </Card>
+</CardGroup>

@@ -1,0 +1,675 @@
+---
+title: Redis Caching
+description: Configure Redis for 600x faster archive browsing performance
+---
+
+# Redis Caching Configuration
+
+Borg UI includes an intelligent caching system that can provide **600x faster archive browsing** using Redis. The cache system automatically compresses large archives and gracefully falls back to in-memory caching when Redis is unavailable.
+
+## Overview
+
+### Performance Impact
+
+<Info>
+  Redis caching transforms the browsing experience:
+  
+  **Without cache:** 5-10 seconds per archive (depending on size)
+  
+  **With cache:** ~10ms per archive (after first load)
+  
+  **Speedup:** Up to 600x faster for large archives
+</Info>
+
+### How It Works
+
+1. **First Browse**: Archive contents loaded via `borg list` (slow)
+2. **Cached**: Results compressed and stored in Redis with TTL
+3. **Subsequent Browses**: Served instantly from cache (fast)
+4. **Automatic Refresh**: Cache expires after TTL, rebuilds on next access
+
+### Cache Architecture
+
+```
+┌─────────────────┐
+│   Borg UI App   │
+└────────┬────────┘
+         │
+         ├─────────────┐
+         │             │
+    ┌────▼───┐    ┌────▼─────┐
+    │ Redis  │    │ In-Memory│
+    │ Cache  │    │ Fallback │
+    └────────┘    └──────────┘
+    (Primary)      (Backup)
+```
+
+**Dual Backend System:**
+- **Redis**: Primary cache (persistent, shared across restarts)
+- **In-Memory**: Automatic fallback (when Redis unavailable)
+
+## Quick Setup
+
+The default Docker Compose configuration includes Redis:
+
+```yaml docker-compose.yml
+services:
+  app:
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CACHE_TTL_SECONDS=7200  # 2 hours
+      - CACHE_MAX_SIZE_MB=2048  # 2GB
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    command: >
+      redis-server
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --appendonly no
+```
+
+<Note>
+  Redis starts automatically with Borg UI. No additional configuration needed for local setup.
+</Note>
+
+## Configuration Options
+
+### Environment Variables
+
+<ParamField path="REDIS_URL" type="string" default="none">
+  External Redis connection URL. Takes precedence over `REDIS_HOST`/`REDIS_PORT`.
+  
+  **Formats:**
+  - TCP: `redis://hostname:port/db`
+  - TCP with password: `redis://:password@hostname:port/db`
+  - TLS: `rediss://hostname:port/db`
+  - Unix socket: `unix:///run/redis.sock?db=0`
+  
+  **Examples:**
+  ```bash
+  # Remote Redis
+  REDIS_URL=redis://192.168.1.100:6379/0
+  
+  # With password
+  REDIS_URL=redis://:mypassword@redis.example.com:6379/0
+  
+  # TLS connection
+  REDIS_URL=rediss://secure-redis.example.com:6380/0
+  
+  # Unix socket
+  REDIS_URL=unix:///var/run/redis/redis.sock?db=0
+  ```
+</ParamField>
+
+<ParamField path="REDIS_HOST" type="string" default="redis">
+  Redis server hostname. Used if `REDIS_URL` is not set.
+  
+  Set to `"disabled"` to disable Redis and use only in-memory cache.
+  
+  ```bash
+  REDIS_HOST=redis
+  ```
+</ParamField>
+
+<ParamField path="REDIS_PORT" type="integer" default="6379">
+  Redis server port.
+  
+  ```bash
+  REDIS_PORT=6379
+  ```
+</ParamField>
+
+<ParamField path="REDIS_DB" type="integer" default="0">
+  Redis database number (0-15).
+  
+  ```bash
+  REDIS_DB=0
+  ```
+</ParamField>
+
+<ParamField path="REDIS_PASSWORD" type="string" default="none">
+  Redis server password (if authentication enabled).
+  
+  ```bash
+  REDIS_PASSWORD=your-redis-password
+  ```
+</ParamField>
+
+<ParamField path="CACHE_TTL_SECONDS" type="integer" default="7200">
+  Cache time-to-live in seconds. Archive data cached for this duration.
+  
+  **Default:** 2 hours (7200 seconds)
+  
+  **Recommendations:**
+  - Static archives: 14400 (4 hours) or higher
+  - Active backups: 3600 (1 hour) or lower
+  - Development: 300 (5 minutes)
+  
+  ```bash
+  CACHE_TTL_SECONDS=7200
+  ```
+</ParamField>
+
+<ParamField path="CACHE_MAX_SIZE_MB" type="integer" default="2048">
+  Maximum in-memory cache size in megabytes (fallback backend only).
+  
+  **Default:** 2GB (2048 MB)
+  
+  ```bash
+  CACHE_MAX_SIZE_MB=2048
+  ```
+</ParamField>
+
+### UI Configuration
+
+<Info>
+  Cache settings can also be configured via **Settings → Cache** in the web UI.
+  
+  UI settings override environment variables and persist to the database.
+</Info>
+
+**Configurable via UI:**
+- Redis URL (external Redis)
+- Cache TTL
+- Cache size limit
+- Enable/disable caching
+
+## Redis Memory Configuration
+
+### Default Configuration
+
+```yaml docker-compose.yml
+redis:
+  command: >
+    redis-server
+    --maxmemory 2gb
+    --maxmemory-policy allkeys-lru
+    --save ""
+    --appendonly no
+```
+
+**Flags explained:**
+
+| Flag | Purpose | Default |
+|------|---------|----------|
+| `--maxmemory` | Maximum memory limit | 2GB |
+| `--maxmemory-policy` | Eviction policy when full | allkeys-lru |
+| `--save ""` | Disable RDB snapshots | Disabled |
+| `--appendonly` | Disable AOF persistence | Disabled |
+
+<Note>
+  Persistence is disabled because Redis is used purely as a cache. Data loss on restart is acceptable since the cache rebuilds automatically.
+</Note>
+
+### Eviction Policies
+
+**`allkeys-lru` (Recommended):**
+- Evicts least recently used keys from all keys
+- Best for pure cache use case
+- Automatically removes old archives to make room
+
+**Alternatives:**
+- `allkeys-lfu`: Evict least frequently used (better for hot data)
+- `volatile-lru`: Only evict keys with TTL set
+- `volatile-ttl`: Evict keys with shortest TTL first
+
+### Memory Sizing
+
+**Estimation formula:**
+```
+Cache Size ≈ (Avg Archive Size × Number of Archives × Compression Ratio)
+```
+
+**Compression:**
+- Archives {">"}100KB: Automatically compressed (zlib level 6)
+- Typical compression: 30-50% of original size
+- Archives {"<"}100KB: Stored uncompressed
+
+**Examples:**
+
+| Archives | Avg Size | Compressed | Recommended Redis |
+|----------|----------|------------|-------------------|
+| 100 | 1MB | ~40MB | 512MB |
+| 500 | 5MB | ~1GB | 2GB |
+| 1000 | 10MB | ~3GB | 4GB |
+| 5000 | 2MB | ~3GB | 4GB |
+
+<Warning>
+  Set `maxmemory` slightly higher than estimated to prevent constant evictions.
+</Warning>
+
+### Adjusting Memory Limits
+
+```yaml docker-compose.yml
+redis:
+  command: >
+    redis-server
+    --maxmemory 4gb
+    --maxmemory-policy allkeys-lru
+```
+
+```bash .env
+CACHE_MAX_SIZE_MB=4096
+```
+
+## External Redis Setup
+
+### Shared Redis Instance
+
+```yaml docker-compose.yml
+services:
+  app:
+    environment:
+      - REDIS_URL=redis://shared-redis.internal.lan:6379/0
+    # Remove local redis service
+```
+
+### Redis with Authentication
+
+```bash .env
+REDIS_URL=redis://:your-password@redis.example.com:6379/0
+```
+
+### TLS/SSL Connection
+
+```bash .env
+REDIS_URL=rediss://secure-redis.example.com:6380/0
+```
+
+### Multiple Borg UI Instances
+
+Share one Redis instance across multiple Borg UI deployments:
+
+```yaml docker-compose.yml
+services:
+  app1:
+    environment:
+      - REDIS_URL=redis://shared-redis:6379/0
+  
+  app2:
+    environment:
+      - REDIS_URL=redis://shared-redis:6379/1  # Different DB
+  
+  shared-redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 8gb
+```
+
+<Note>
+  Use different Redis databases (0-15) to isolate cache data between instances.
+</Note>
+
+## Cache Management
+
+### View Cache Statistics
+
+**UI:** Settings → Cache → Statistics
+
+**API:**
+```http
+GET /api/cache/stats
+```
+
+```json Response
+{
+  "backend": "redis",
+  "available": true,
+  "connection_type": "local",
+  "connection_info": "redis:6379/0",
+  "hits": 1523,
+  "misses": 127,
+  "hit_rate": 92.3,
+  "size_bytes": 157286400,
+  "entry_count": 245,
+  "ttl_seconds": 7200,
+  "max_size_mb": 2048
+}
+```
+
+### Clear Cache
+
+<CodeGroup>
+
+```http Clear All
+POST /api/cache/clear
+```
+
+```http Clear Repository
+POST /api/cache/clear-repository
+Content-Type: application/json
+
+{
+  "repo_id": 1
+}
+```
+
+</CodeGroup>
+
+**Use cases:**
+- After pruning archives
+- After deleting archives
+- Testing/troubleshooting
+- Repository structure changed
+
+### Cache Keys
+
+**Format:** `archive:{repo_id}:{archive_name}`
+
+**Examples:**
+- `archive:1:backup-2026-02-28T10:00:00`
+- `archive:5:weekly-2026-W09`
+- `archive:12:daily-monday`
+
+### Manual Redis Access
+
+```bash
+# Connect to Redis container
+docker exec -it borg-redis redis-cli
+
+# View all cache keys
+KEYS archive:*
+
+# Get cache entry count
+DBSIZE
+
+# View memory usage
+INFO memory
+
+# Clear entire database
+FLUSHDB
+
+# Test connection
+PING
+```
+
+## In-Memory Fallback
+
+### When It Activates
+
+Automatic fallback to in-memory cache when:
+- Redis connection fails
+- Redis not configured (`REDIS_HOST=disabled`)
+- Redis unavailable during startup
+- Redis fails 3+ consecutive operations
+
+### Limitations
+
+| Feature | Redis | In-Memory |
+|---------|-------|----------|
+| Persistence | Survives restart | Lost on restart |
+| Shared | Multi-instance | Single instance |
+| Size limit | Set via maxmemory | Set via CACHE_MAX_SIZE_MB |
+| Eviction | Configurable | LRU only |
+| Performance | Excellent | Good |
+
+### Disabling Redis
+
+```bash .env
+REDIS_HOST=disabled
+```
+
+```yaml docker-compose.yml
+services:
+  app:
+    environment:
+      - REDIS_HOST=disabled
+      - CACHE_MAX_SIZE_MB=2048
+    # Remove depends_on redis
+
+# Remove redis service
+```
+
+## Performance Tuning
+
+### Large Repositories (>1000 archives)
+
+```yaml docker-compose.yml
+redis:
+  command: >
+    redis-server
+    --maxmemory 8gb
+    --maxmemory-policy allkeys-lru
+    --tcp-backlog 511
+    --timeout 0
+    --tcp-keepalive 300
+```
+
+```bash .env
+CACHE_TTL_SECONDS=14400  # 4 hours
+CACHE_MAX_SIZE_MB=8192   # 8GB
+```
+
+### Very Large Archives (>500MB each)
+
+```bash .env
+CACHE_TTL_SECONDS=86400  # 24 hours (if archives rarely change)
+```
+
+```yaml
+redis:
+  command: >
+    redis-server
+    --maxmemory 16gb
+    --maxmemory-policy allkeys-lru
+```
+
+### High-Traffic Deployments
+
+```yaml
+redis:
+  command: >
+    redis-server
+    --maxmemory 4gb
+    --maxmemory-policy allkeys-lfu  # Least frequently used
+    --maxclients 10000
+```
+
+### Low-Memory Environments
+
+```yaml
+redis:
+  command: >
+    redis-server
+    --maxmemory 512mb
+    --maxmemory-policy allkeys-lru
+```
+
+```bash .env
+CACHE_TTL_SECONDS=1800   # 30 minutes
+CACHE_MAX_SIZE_MB=512
+```
+
+## Monitoring
+
+### Health Checks
+
+**Redis health check:**
+```yaml
+healthcheck:
+  test: ["CMD", "redis-cli", "ping"]
+  interval: 10s
+  timeout: 3s
+  retries: 3
+```
+
+**Check status:**
+```bash
+docker-compose ps redis
+```
+
+### Redis Logs
+
+```bash
+# View Redis logs
+docker-compose logs -f redis
+
+# Check for errors
+docker-compose logs redis | grep -i error
+```
+
+### Performance Metrics
+
+```bash
+# Connect to Redis
+docker exec -it borg-redis redis-cli
+
+# View info
+INFO stats
+INFO memory
+INFO persistence
+
+# Monitor commands in real-time
+MONITOR
+
+# Slow query log
+SLOWLOG GET 10
+```
+
+## Troubleshooting
+
+### Redis Connection Failed
+
+**Symptoms:**
+```
+Redis health check failed: Connection refused
+Fallback to in-memory cache
+```
+
+**Solutions:**
+1. Check Redis is running:
+   ```bash
+   docker-compose ps redis
+   ```
+2. Check Redis logs:
+   ```bash
+   docker-compose logs redis
+   ```
+3. Restart Redis:
+   ```bash
+   docker-compose restart redis
+   ```
+4. Verify network:
+   ```bash
+   docker exec -it borg-web-ui ping redis
+   ```
+
+### Out of Memory
+
+**Symptoms:**
+```
+OOM command not allowed when used memory > 'maxmemory'
+```
+
+**Solutions:**
+1. Increase Redis memory:
+   ```yaml
+   redis:
+     command: redis-server --maxmemory 4gb
+   ```
+2. Lower TTL to expire data faster:
+   ```bash
+   CACHE_TTL_SECONDS=3600
+   ```
+3. Manually clear cache:
+   ```bash
+   docker exec -it borg-redis redis-cli FLUSHDB
+   ```
+
+### Slow Performance
+
+**Symptoms:**
+Cache hit rate {"<"}80%, slow archive browsing
+
+**Solutions:**
+1. Check hit rate:
+   ```bash
+   docker exec -it borg-redis redis-cli INFO stats | grep hit_rate
+   ```
+2. Increase TTL:
+   ```bash
+   CACHE_TTL_SECONDS=14400  # 4 hours
+   ```
+3. Increase memory:
+   ```yaml
+   redis:
+     command: redis-server --maxmemory 4gb
+   ```
+4. Check Redis is actually being used:
+   ```bash
+   docker exec -it borg-redis redis-cli DBSIZE
+   ```
+
+### Cache Not Updating
+
+**Symptoms:**
+New archives not showing, stale data displayed
+
+**Solutions:**
+1. Clear repository cache:
+   ```http
+   POST /api/cache/clear-repository
+   {"repo_id": 1}
+   ```
+2. Check TTL expiration:
+   ```bash
+   docker exec -it borg-redis redis-cli TTL archive:1:archive-name
+   ```
+3. Verify archive name matches cache key
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use Redis for Production">
+    Always use Redis in production. The in-memory fallback is for emergency/testing only.
+  </Accordion>
+  
+  <Accordion title="Set Appropriate TTL">
+    Balance freshness vs performance:
+    - Static archives: Longer TTL (4-24 hours)
+    - Active backups: Shorter TTL (1-2 hours)
+    - Development: Very short TTL (5-30 minutes)
+  </Accordion>
+  
+  <Accordion title="Size Redis Appropriately">
+    Allocate 2-4x the average total archive size (compressed) for optimal hit rates.
+  </Accordion>
+  
+  <Accordion title="Monitor Hit Rate">
+    Target 90%+ hit rate. If lower, increase memory or TTL.
+  </Accordion>
+  
+  <Accordion title="Disable Persistence">
+    Redis is a cache - disable RDB/AOF to improve performance and reduce disk I/O.
+  </Accordion>
+  
+  <Accordion title="Clear After Major Changes">
+    Manually clear cache after pruning, deleting archives, or restructuring repositories.
+  </Accordion>
+  
+  <Accordion title="Use External Redis for Scale">
+    Share one Redis instance across multiple Borg UI deployments for better resource utilization.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Environment Variables" icon="gears" href="/configuration/environment-variables">
+    Complete cache environment variable reference
+  </Card>
+  <Card title="Docker Compose" icon="docker" href="/configuration/docker-compose">
+    Advanced Docker Compose configurations
+  </Card>
+  <Card title="Performance Optimization" icon="rocket" href="/advanced/performance">
+    Advanced performance tuning guide
+  </Card>
+  <Card title="API Reference" icon="code" href="/api-reference/cache">
+    Cache management API documentation
+  </Card>
+</CardGroup>

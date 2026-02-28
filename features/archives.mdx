@@ -1,0 +1,517 @@
+---
+title: "Archive Browsing"
+description: "Browse and restore files from backup archives with Redis caching for 600x faster performance"
+---
+
+## Overview
+
+Borg UI provides fast archive browsing with intelligent Redis caching that dramatically improves performance for large repositories. Navigate through backup archives, preview files, and restore individual files or entire directories.
+
+## Redis Caching (600x Faster)
+
+Archive browsing uses Redis caching to accelerate file listings:
+
+```python
+# From browse.py:23-255
+MAX_ITEMS_IN_MEMORY = 1_000_000  # Maximum items to load
+MAX_ESTIMATED_MEMORY_MB = 1024   # 1GB memory limit
+ITEM_SIZE_ESTIMATE = 200         # Average bytes per item
+
+@router.get("/{repository_id}/{archive_name}")
+async def browse_archive_contents(
+    repository_id: int,
+    archive_name: str,
+    path: str = Query("", description="Path within archive"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Check cache first
+    all_items = await archive_cache.get(repository_id, archive_name)
+    
+    if all_items is not None:
+        logger.info("Using cached archive contents",
+                   archive=archive_name,
+                   items_count=len(all_items))
+```
+
+<Note>
+  **Performance Improvement**: First browse loads from Borg (slow), subsequent browses use Redis cache (600x faster). Cache is automatically invalidated when archives change.
+</Note>
+
+## Memory Safety
+
+Borg UI protects against out-of-memory errors when browsing large archives:
+
+```python
+# From browse.py:52-75
+result = await borg.list_archive_contents(
+    repository.path,
+    archive_name,
+    path="",
+    remote_path=repository.remote_path,
+    passphrase=repository.passphrase,
+    max_lines=max_items,  # Kill borg process if limit exceeded
+    bypass_lock=repository.bypass_lock
+)
+
+# Check if line limit was exceeded
+if result.get("line_count_exceeded"):
+    lines_read = result.get("lines_read", 0)
+    raise HTTPException(
+        status_code=413,
+        detail=f"Archive is too large to browse (>{lines_read:,} files). "
+               f"Maximum supported: {max_items:,} files. "
+               f"You can increase this limit in Settings > System."
+    )
+```
+
+**Configurable Limits:**
+- `browse_max_items`: Maximum files to load (default: 1,000,000)
+- `browse_max_memory_mb`: Maximum memory usage (default: 1024 MB)
+
+<Warning>
+  For archives with millions of files, consider using command-line tools or increasing memory limits in Settings > System.
+</Warning>
+
+## Browsing Archives
+
+<Steps>
+  <Step title="List Available Archives">
+    Get all archives in a repository:
+
+    ```bash
+    GET /api/archives/list?repository=<repo_path>
+    ```
+
+    ```python
+    # From archives.py:22-58
+    @router.get("/list")
+    async def list_archives(
+        repository: str,
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db)
+    ):
+        result = await borg.list_archives(
+            repository,
+            remote_path=repo.remote_path,
+            passphrase=repo.passphrase,
+            bypass_lock=repo.bypass_lock
+        )
+    ```
+
+    **Response:**
+    ```json
+    {
+      "archives": [
+        {
+          "name": "prod-2026-02-28T10:30:00",
+          "time": "2026-02-28T10:30:00.000000",
+          "id": "a1b2c3d4e5f6"
+        },
+        {
+          "name": "prod-2026-02-27T10:30:00",
+          "time": "2026-02-27T10:30:00.000000",
+          "id": "f6e5d4c3b2a1"
+        }
+      ]
+    }
+    ```
+  </Step>
+
+  <Step title="Browse Archive Contents">
+    Navigate through the archive filesystem:
+
+    ```bash
+    GET /api/browse/{repository_id}/{archive_name}?path=/var/www
+    ```
+
+    **Response:**
+    ```json
+    {
+      "items": [
+        {
+          "name": "html",
+          "type": "directory",
+          "size": 524288000,
+          "path": "var/www/html",
+          "mtime": "2026-02-28T10:25:00"
+        },
+        {
+          "name": "index.php",
+          "type": "file",
+          "size": 2048,
+          "path": "var/www/index.php",
+          "mtime": "2026-02-28T09:15:00"
+        }
+      ]
+    }
+    ```
+  </Step>
+
+  <Step title="Get Archive Details">
+    View detailed information about an archive:
+
+    ```bash
+    GET /api/archives/{archive_id}/info?repository=<repo_path>&include_files=true&file_limit=1000
+    ```
+
+    ```python
+    # From archives.py:60-180
+    @router.get("/{archive_id}/info")
+    async def get_archive_info(
+        repository: str,
+        archive_id: str,
+        include_files: bool = False,
+        file_limit: int = 1000,
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db)
+    ):
+    ```
+  </Step>
+</Steps>
+
+## Archive Information
+
+Get comprehensive metadata about an archive:
+
+```json
+{
+  "info": {
+    "name": "prod-2026-02-28T10:30:00",
+    "id": "a1b2c3d4e5f6",
+    "start": "2026-02-28T10:30:00",
+    "end": "2026-02-28T10:45:30",
+    "duration": 930.5,
+    "stats": {
+      "original_size": 1073741824,
+      "compressed_size": 644245094,
+      "deduplicated_size": 214748364,
+      "nfiles": 2500
+    },
+    "command_line": [
+      "borg", "create",
+      "--stats", "--json", "--progress",
+      "::prod-2026-02-28T10:30:00",
+      "/var/www", "/etc/nginx"
+    ],
+    "hostname": "web-server-01",
+    "username": "root",
+    "chunker_params": "19,23,21,4095",
+    "repository": {
+      "id": "abc123",
+      "location": "ssh://user@backup.example.com/backups/prod"
+    },
+    "encryption": {
+      "mode": "repokey-blake2"
+    }
+  }
+}
+```
+
+```python
+# From archives.py:92-125
+enhanced_info = {
+    "name": archive_info.get("name"),
+    "id": archive_info.get("id"),
+    "start": archive_info.get("start"),
+    "end": archive_info.get("end"),
+    "duration": archive_info.get("duration"),
+    "stats": archive_info.get("stats", {}),
+    "command_line": archive_info.get("command_line", []),
+    "hostname": archive_info.get("hostname"),
+    "username": archive_info.get("username"),
+    "chunker_params": archive_info.get("chunker_params"),
+    "repository": archive_data.get("repository", {}),
+    "encryption": archive_data.get("encryption", {}),
+    "cache": archive_data.get("cache", {})
+}
+```
+
+## Directory Size Calculation
+
+Borg UI calculates directory sizes recursively:
+
+```python
+# From browse.py:133-161
+def calculate_directory_size(dir_path: str) -> int:
+    """Calculate total size of all files in a directory recursively"""
+    total_size = 0
+    file_count = 0
+    search_prefix = f"{dir_path}/" if dir_path else ""
+    
+    for item in all_items:
+        item_path = item["path"]
+        # Check if this item is under the directory
+        if search_prefix:
+            if item_path.startswith(search_prefix) or item_path == dir_path:
+                # Only count files, not directories
+                if item.get("type") != "d" and item.get("size") is not None:
+                    total_size += item.get("size", 0)
+                    file_count += 1
+    
+    return total_size
+```
+
+**Example:**
+```
+/var/www/
+├── html/          (500 MB - calculated from contents)
+│   ├── images/    (300 MB)
+│   └── css/       (200 MB)
+└── logs/          (50 MB)
+```
+
+## File Restoration
+
+### Download Individual Files
+
+```bash
+GET /api/archives/download?repository=<repo>&archive=<name>&file_path=<path>&token=<auth>
+```
+
+```python
+# From archives.py:294-391
+@router.get("/download")
+async def download_file_from_archive(
+    repository: str,
+    archive: str,
+    file_path: str,
+    token: str,
+    db: Session = Depends(get_db)
+):
+    # Create temporary directory for extraction
+    temp_dir = tempfile.mkdtemp()
+    
+    try:
+        # Extract the specific file
+        result = await borg.extract_archive(
+            repository,
+            archive,
+            [file_path],
+            temp_dir,
+            dry_run=False,
+            remote_path=repo.remote_path,
+            passphrase=repo.passphrase,
+            bypass_lock=repo.bypass_lock
+        )
+        
+        # Return file as download
+        return FileResponse(
+            path=extracted_file_path,
+            filename=filename,
+            media_type='application/octet-stream'
+        )
+```
+
+<Steps>
+  <Step title="Select File">
+    Navigate to the file in the archive browser.
+  </Step>
+
+  <Step title="Extract File">
+    Borg UI extracts the file to a temporary directory:
+
+    ```bash
+    borg extract ::archive-name path/to/file
+    ```
+  </Step>
+
+  <Step title="Download">
+    File is served as a download and temporary files are cleaned up.
+  </Step>
+</Steps>
+
+## Deleting Archives
+
+Remove old archives to free up space:
+
+```bash
+DELETE /api/archives/{archive_id}?repository=<repo_path>
+```
+
+```python
+# From archives.py:224-292
+@router.delete("/{archive_id}")
+async def delete_archive(
+    repository: str,
+    archive_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Validate admin access
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    # Check if there's already a running delete job
+    running_job = db.query(DeleteArchiveJob).filter(
+        DeleteArchiveJob.repository_id == repo.id,
+        DeleteArchiveJob.archive_name == archive_id,
+        DeleteArchiveJob.status == "running"
+    ).first()
+    
+    if running_job:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Delete operation already running (Job ID: {running_job.id})"
+        )
+    
+    # Create delete job record
+    delete_job = DeleteArchiveJob(
+        repository_id=repo.id,
+        repository_path=repo.path,
+        archive_name=archive_id,
+        status="pending"
+    )
+    db.add(delete_job)
+    db.commit()
+    
+    # Execute delete asynchronously
+    asyncio.create_task(
+        delete_archive_service.execute_delete(
+            delete_job.id,
+            repo.id,
+            archive_id,
+            None  # New session for background task
+        )
+    )
+```
+
+**Response:**
+```json
+{
+  "job_id": 456,
+  "status": "pending",
+  "message": "Archive deletion started in background"
+}
+```
+
+<Warning>
+  Deleting archives is permanent! Ensure you no longer need the data before deletion. Consider using `borg prune` with retention policies instead.
+</Warning>
+
+## Delete Job Status
+
+Monitor archive deletion progress:
+
+```bash
+GET /api/archives/delete-jobs/{job_id}
+```
+
+```python
+# From archives.py:394-432
+@router.get("/delete-jobs/{job_id}")
+async def get_delete_job_status(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    job = db.query(DeleteArchiveJob).filter(DeleteArchiveJob.id == job_id).first()
+    
+    # Read log file if it exists
+    logs = None
+    if job.log_file_path and os.path.exists(job.log_file_path):
+        with open(job.log_file_path, 'r') as f:
+            logs = f.read()
+```
+
+**Response:**
+```json
+{
+  "id": 456,
+  "repository_id": 1,
+  "archive_name": "prod-2026-02-01T10:30:00",
+  "status": "completed",
+  "started_at": "2026-02-28T11:00:00Z",
+  "completed_at": "2026-02-28T11:15:00Z",
+  "progress": 100,
+  "progress_message": "Archive deleted successfully",
+  "has_logs": true
+}
+```
+
+## Cancel Delete Operation
+
+```bash
+POST /api/archives/delete-jobs/{job_id}/cancel
+```
+
+```python
+# From archives.py:434-451
+@router.post("/delete-jobs/{job_id}/cancel")
+async def cancel_delete_job(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    await delete_archive_service.cancel_delete(job_id, db)
+```
+
+## Cache Management
+
+Redis cache stores parsed archive listings:
+
+```python
+# From browse.py:122-131
+# Store in cache
+cache_success = await archive_cache.set(repository_id, archive_name, all_items)
+if cache_success:
+    logger.info("Cached archive contents",
+               archive=archive_name,
+               items_count=len(all_items))
+else:
+    logger.warning("Failed to cache archive (too large or cache full)",
+                 archive=archive_name,
+                 items_count=len(all_items))
+```
+
+**Cache Behavior:**
+- First browse: Fetches from Borg (slow)
+- Subsequent browses: Uses Redis cache (600x faster)
+- Auto-invalidation: Cache cleared when archives change
+- Size limits: Enforced by cache service
+
+<Card title="Performance Tips" icon="rocket">
+  - **Redis Caching**: Enable Redis for 600x faster archive browsing
+  - **Memory Limits**: Adjust `browse_max_items` for very large archives
+  - **Directory Sizes**: Calculated recursively from cached data
+  - **Bypass Lock**: Use for read-only access to locked repositories
+  - **File Restoration**: Extract only needed files, not entire archives
+  - **Cleanup**: Use `borg prune` instead of manual archive deletion
+</Card>
+
+## Bypass Lock Mode
+
+Browse archives while backups are running:
+
+```python
+# From browse.py:59
+bypass_lock=repository.bypass_lock
+```
+
+**Use Cases:**
+- Repository is locked by another operation
+- Read-only access to remote repositories
+- Observability-only repositories
+
+<Note>
+  Bypass lock mode uses `borg --bypass-lock` flag which is safe for read-only operations but should not be used during write operations.
+</Note>
+
+## File Listing Format
+
+Borg UI parses JSON-lines output from Borg:
+
+```json
+{"path": "var/www/index.php", "type": "f", "size": 2048, "mtime": "2026-02-28T09:15:00"}
+{"path": "var/www/html", "type": "d", "size": 0, "mtime": "2026-02-28T10:25:00"}
+{"path": "var/www/html/image.jpg", "type": "f", "size": 524288, "mtime": "2026-02-27T14:30:00"}
+```
+
+**Field Types:**
+- `f`: Regular file
+- `d`: Directory
+- `l`: Symbolic link
+- `h`: Hard link

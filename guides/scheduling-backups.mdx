@@ -1,0 +1,628 @@
+---
+title: 'Scheduling Automated Backups'
+description: 'Set up cron-based backup schedules with visual builder and execution tracking'
+---
+
+## Overview
+
+Borg UI's scheduler automates backups using cron expressions, allowing you to:
+- Schedule regular backups (hourly, daily, weekly, monthly)
+- Back up multiple repositories in a single schedule
+- Run pre/post backup scripts
+- Automatically prune and compact repositories
+- Track execution history and logs
+
+## Creating Your First Schedule
+
+<Steps>
+  <Step title="Navigate to Schedules">
+    Click **Schedules** in the sidebar to access the schedule management page.
+  </Step>
+
+  <Step title="Create New Schedule">
+    Click **Create Schedule** to open the schedule creation dialog.
+  </Step>
+
+  <Step title="Configure Basic Settings">
+    **Schedule Name**: Descriptive name (e.g., "Nightly Home Backup")
+
+    **Description** (optional): Additional notes about the schedule
+
+    **Enabled**: Toggle to activate/deactivate schedule
+  </Step>
+
+  <Step title="Set Schedule Timing">
+    Choose how to define the schedule:
+
+    <Tabs>
+      <Tab title="Presets">
+        Select from common patterns:
+        - Every 5 minutes
+        - Hourly
+        - Daily at 2 AM
+        - Weekly on Sunday
+        - Monthly on 1st
+        - Weekdays at 9 AM
+      </Tab>
+
+      <Tab title="Visual Builder">
+        Build cron expression visually:
+        - **Minute**: 0-59 or */N
+        - **Hour**: 0-23 or */N
+        - **Day of Month**: 1-31
+        - **Month**: 1-12
+        - **Day of Week**: 0-6 (Sun-Sat)
+
+        Preview next 10 run times as you configure.
+      </Tab>
+
+      <Tab title="Custom Expression">
+        Enter cron expression directly:
+        ```plaintext
+        0 2 * * *  # Daily at 2 AM
+        */30 * * * *  # Every 30 minutes
+        0 0 * * 0  # Weekly on Sunday midnight
+        0 3 1 * *  # Monthly on 1st at 3 AM
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Select Repositories">
+    Choose which repositories to back up:
+
+    **Single Repository**: Select one repository
+
+    **Multiple Repositories**: Select multiple repositories (run in sequence)
+
+    <Note>
+    Multi-repository schedules back up each repository one after another, not simultaneously.
+    </Note>
+  </Step>
+
+  <Step title="Configure Archive Naming (Optional)">
+    Customize archive names using templates:
+
+    ```plaintext
+    {job_name}-{now}
+    {repo_name}-{date}
+    backup-{timestamp}
+    ```
+
+    **Available Variables**:
+    - `{job_name}`: Schedule name
+    - `{repo_name}`: Repository name
+    - `{now}`: Full timestamp (2024-01-15T02:00:00)
+    - `{date}`: Date only (2024-01-15)
+    - `{time}`: Time only (02:00:00)
+    - `{timestamp}`: Unix timestamp
+
+    <Tip>
+    Default template if not specified: `{job_name}-{now}`
+    </Tip>
+  </Step>
+
+  <Step title="Add Schedule-Level Hooks (Optional)">
+    Run scripts before/after all backups:
+
+    - **Pre-Backup Script**: Runs once before backing up any repository
+    - **Post-Backup Script**: Runs once after all repositories complete
+    - **Run Repository Scripts**: Enable to also run per-repository hooks
+
+    <Note>
+    Schedule-level hooks are ideal for global preparation/cleanup tasks. See [Backup Scripts guide](/guides/backup-scripts) for examples.
+    </Note>
+  </Step>
+
+  <Step title="Configure Maintenance (Optional)">
+    Automatically maintain repositories after backup:
+
+    **Prune Settings**:
+    - **Run Prune After Backup**: Remove old archives
+    - **Keep Hourly**: Number of hourly backups to keep
+    - **Keep Daily**: Number of daily backups (default: 7)
+    - **Keep Weekly**: Number of weekly backups (default: 4)
+    - **Keep Monthly**: Number of monthly backups (default: 6)
+    - **Keep Quarterly**: Number of quarterly backups
+    - **Keep Yearly**: Number of yearly backups (default: 1)
+
+    **Compact Settings**:
+    - **Run Compact After Prune**: Reclaim disk space after pruning
+
+    <Tip>
+    Pruning removes old archives based on retention policy. Compacting frees up disk space by removing deleted archive data.
+    </Tip>
+  </Step>
+
+  <Step title="Create Schedule">
+    Click **Create** to save the schedule.
+
+    The schedule is now active and will run at the specified times.
+  </Step>
+</Steps>
+
+## Cron Expression Examples
+
+Common scheduling patterns:
+
+<CodeGroup>
+```plaintext Hourly
+0 * * * *  # Every hour at minute 0
+*/30 * * * *  # Every 30 minutes
+0 */6 * * *  # Every 6 hours
+```
+
+```plaintext Daily
+0 2 * * *  # Daily at 2 AM
+30 3 * * *  # Daily at 3:30 AM
+0 0,12 * * *  # Twice daily (midnight and noon)
+```
+
+```plaintext Weekly
+0 0 * * 0  # Weekly on Sunday at midnight
+0 3 * * 1  # Weekly on Monday at 3 AM
+0 2 * * 0,3,5  # Sunday, Wednesday, Friday at 2 AM
+```
+
+```plaintext Monthly
+0 0 1 * *  # Monthly on 1st at midnight
+0 3 15 * *  # Monthly on 15th at 3 AM
+0 0 1,15 * *  # Twice monthly (1st and 15th)
+```
+
+```plaintext Advanced
+0 9 * * 1-5  # Weekdays at 9 AM
+0 6 * * 0,6  # Weekends at 6 AM
+*/15 9-17 * * 1-5  # Every 15 min during business hours
+0 2 1 */3 *  # Quarterly on 1st at 2 AM
+```
+</CodeGroup>
+
+<Note>
+Borg UI uses 5-field cron format (minute, hour, day, month, weekday). Use the visual builder to avoid syntax errors.
+</Note>
+
+## Multi-Repository Schedules
+
+Schedule backups for multiple repositories in a single job:
+
+### Configuration
+
+1. Create schedule as normal
+2. In **Repositories** section, select multiple repositories
+3. Repositories are backed up sequentially in the order shown
+4. Drag to reorder execution sequence
+
+### Execution Flow
+
+```plaintext
+1. Schedule triggers at cron time
+2. Run schedule-level pre-backup script (if configured)
+3. For each repository:
+   a. Run repository pre-backup script (if enabled)
+   b. Execute backup
+   c. Run repository post-backup script (if enabled)
+   d. Run prune (if enabled)
+   e. Run compact (if enabled)
+4. Run schedule-level post-backup script (if configured)
+5. Schedule completes
+```
+
+### Benefits
+
+- **Single schedule**: Manage timing in one place
+- **Sequential execution**: Prevents resource contention
+- **Unified monitoring**: Track all backups together
+- **Global hooks**: Run setup/cleanup once for all repositories
+
+<Tip>
+For large repositories, consider separate schedules at different times to spread out system load.
+</Tip>
+
+## Prune and Compact
+
+### Understanding Pruning
+
+Pruning removes old archives according to retention policy:
+
+**Retention Strategy Example:**
+```yaml
+Keep Hourly: 24    # Last 24 hours
+Keep Daily: 7      # Last 7 days
+Keep Weekly: 4     # Last 4 weeks
+Keep Monthly: 6    # Last 6 months
+Keep Yearly: 3     # Last 3 years
+```
+
+Borg automatically determines which archives to keep:
+- Newest archive in each time bucket is kept
+- Older archives are pruned
+- Multiple retention rules can apply to same archive
+
+### Understanding Compacting
+
+Compacting reclaims disk space after pruning:
+
+1. **Prune**: Marks archives as deleted
+2. **Compact**: Removes deleted archive data and defragments repository
+
+<Warning>
+Compacting can take significant time on large repositories. It locks the repository during operation.
+</Warning>
+
+### When to Run Maintenance
+
+**Run After Every Backup**:
+- Small repositories (< 100 GB)
+- Frequent backups (hourly/daily)
+- Storage space is constrained
+
+**Run Less Frequently**:
+- Large repositories (> 1 TB)
+- Weekly/monthly backups
+- Separate maintenance schedule
+
+**Separate Maintenance Schedule**:
+For very large repositories, create dedicated maintenance schedules:
+
+1. Create schedule: "Weekly Maintenance"
+2. Cron: `0 4 * * 0` (Sunday 4 AM)
+3. Select repositories
+4. Enable prune and compact
+5. Disable backup (maintenance only)
+
+<Note>
+Borg UI supports maintenance-only schedules that skip backup and only run prune/compact.
+</Note>
+
+## Execution History and Logs
+
+### Viewing Past Executions
+
+1. Navigate to **Schedules**
+2. Click on a schedule
+3. View **Execution History** tab:
+   - Execution timestamp
+   - Status (success, failed, running)
+   - Duration
+   - Repositories backed up
+   - Link to backup jobs
+
+### Backup Job Logs
+
+1. From execution history, click **View Jobs**
+2. See individual backup jobs for each repository
+3. Click a job to view:
+   - Detailed progress
+   - Borg output
+   - Hook execution logs
+   - Error messages
+
+<Tip>
+Scheduled jobs show "scheduled_job_id" linking them back to the schedule that created them.
+</Tip>
+
+## Managing Schedules
+
+### Edit Schedule
+
+1. Navigate to **Schedules**
+2. Click schedule name
+3. Click **Edit**
+4. Modify settings
+5. Save changes
+
+<Note>
+Changing cron expression updates "Next Run" time immediately.
+</Note>
+
+### Disable/Enable Schedule
+
+**Quick Toggle**:
+1. Navigate to **Schedules**
+2. Click toggle switch next to schedule name
+
+**Via Edit**:
+1. Edit schedule
+2. Toggle **Enabled** checkbox
+3. Save
+
+<Tip>
+Disabled schedules are preserved but won't execute until re-enabled.
+</Tip>
+
+### Run Schedule Manually
+
+1. Navigate to **Schedules**
+2. Click schedule name
+3. Click **Run Now**
+4. Schedule executes immediately (doesn't affect next scheduled run)
+
+<Note>
+Manual runs are useful for testing schedules or running ad-hoc backups outside the normal schedule.
+</Note>
+
+### Duplicate Schedule
+
+1. Navigate to **Schedules**
+2. Click schedule name
+3. Click **Duplicate**
+4. New schedule created with name "Copy of [Original Name]"
+5. Edit and customize as needed
+
+<Tip>
+Duplicating is useful for creating similar schedules with slight variations (e.g., different timing for different repositories).
+</Tip>
+
+### Delete Schedule
+
+1. Navigate to **Schedules**
+2. Click schedule name
+3. Click **Delete**
+4. Confirm deletion
+
+<Warning>
+Deleting a schedule does not delete backup jobs created by it. Backup history is preserved.
+</Warning>
+
+## Advanced Scheduling Patterns
+
+### Staggered Backups
+
+Spread backups throughout the day to avoid resource spikes:
+
+```plaintext
+Schedule 1 (Critical Data):     0 */4 * * *  # Every 4 hours
+Schedule 2 (User Documents):    30 */6 * * *  # Every 6 hours at :30
+Schedule 3 (Logs):              0 0 * * *  # Daily at midnight
+Schedule 4 (Media):             0 3 * * 0  # Weekly Sunday 3 AM
+```
+
+### Tiered Retention
+
+Different retention policies for different data:
+
+**Critical Data** (frequent, long retention):
+```yaml
+Schedule: Every 4 hours
+Prune:
+  Hourly: 24
+  Daily: 30
+  Weekly: 12
+  Monthly: 24
+  Yearly: 5
+```
+
+**User Documents** (daily, medium retention):
+```yaml
+Schedule: Daily at 2 AM
+Prune:
+  Daily: 14
+  Weekly: 8
+  Monthly: 6
+  Yearly: 2
+```
+
+**Logs** (daily, short retention):
+```yaml
+Schedule: Daily at midnight
+Prune:
+  Daily: 7
+  Weekly: 4
+  Monthly: 0
+  Yearly: 0
+```
+
+### Business Hours vs Off-Hours
+
+Adjust backup frequency based on activity:
+
+```plaintext
+Business Hours (Frequent):  */15 9-17 * * 1-5  # Every 15 min, weekdays 9-5
+Off-Hours (Less Frequent):  0 */2 * * *  # Every 2 hours
+Weekends (Once Daily):      0 6 * * 0,6  # Weekends at 6 AM
+```
+
+## Notifications
+
+Borg UI integrates with 100+ notification services via Apprise:
+
+### Configure Schedule Notifications
+
+1. Navigate to **Settings** → **Notifications**
+2. Add notification service (Email, Slack, Discord, etc.)
+3. Create notification profile:
+   - **Name**: "Backup Alerts"
+   - **Services**: Select configured services
+   - **Events**: Choose when to notify
+     - ✅ Backup Started
+     - ✅ Backup Success
+     - ✅ Backup Failed
+     - ✅ Backup Warning
+4. Assign profile to repositories or schedules
+
+<Tip>
+See [Notifications Guide](/features/notifications) for detailed configuration.
+</Tip>
+
+## Monitoring and Alerts
+
+### Dashboard Overview
+
+The dashboard shows:
+- **Recent Backup Jobs**: Latest executions with status
+- **Upcoming Schedules**: Next scheduled runs
+- **Failed Jobs**: Backups needing attention
+- **Repository Health**: Archive counts, sizes, last backup
+
+### Email Reports
+
+Configure daily/weekly summary emails:
+1. Set up Email notification service
+2. Create scheduled report (separate from backup schedules)
+3. Receive summaries of:
+   - Successful backups
+   - Failed backups
+   - Storage usage trends
+   - Schedule compliance
+
+### MQTT Integration
+
+Publish backup events to MQTT broker for external monitoring:
+
+```yaml
+environment:
+  - MQTT_BROKER=mqtt.example.com
+  - MQTT_PORT=1883
+  - MQTT_USERNAME=borgui
+  - MQTT_PASSWORD=secret
+```
+
+Topics published:
+- `borgui/backup/start`
+- `borgui/backup/progress`
+- `borgui/backup/complete`
+- `borgui/backup/failed`
+
+## Troubleshooting
+
+### Schedule Not Running
+
+**Check schedule is enabled**:
+1. Navigate to **Schedules**
+2. Verify toggle is "On"
+3. Check "Next Run" time is in the future
+
+**Verify cron expression**:
+1. Edit schedule
+2. Check "Next Runs" preview
+3. If empty, expression may be invalid
+
+**Check system time**:
+```bash
+docker exec borg-ui date
+```
+Ensure container time is correct and timezone is set.
+
+### Schedule Runs But Backup Fails
+
+**Review backup job logs**:
+1. Navigate to **Backup Jobs**
+2. Find job from schedule (shows "scheduled_job_id")
+3. Review error messages
+
+**Common Issues**:
+- Repository locked (previous backup still running)
+- Permissions denied (source directories not accessible)
+- Disk space exhausted
+- SSH connection failed (remote repositories)
+
+### Prune/Compact Hangs
+
+**Check repository lock**:
+```bash
+borg break-lock /path/to/repository
+```
+
+**Monitor compact progress**:
+1. Navigate to **Maintenance Jobs**
+2. View compact job status
+3. Check progress messages
+
+<Warning>
+Compact operations can take hours on large repositories. Avoid breaking locks unless process is truly stuck.
+</Warning>
+
+### Hooks Fail
+
+**Review hook logs**:
+1. Find backup job from schedule
+2. View logs for hook stderr output
+3. Check hook exit codes
+
+**Common Hook Issues**:
+- Script syntax errors
+- Timeouts (increase timeout in schedule settings)
+- Permission issues (Docker socket not mounted)
+- Missing dependencies
+
+See [Backup Scripts troubleshooting](/guides/backup-scripts#troubleshooting) for detailed hook debugging.
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Test Schedules Thoroughly">
+    Before relying on schedules:
+    1. Create test schedule with frequent interval (e.g., every 5 minutes)
+    2. Verify backups complete successfully
+    3. Check logs for warnings
+    4. Test restore from scheduled backup
+    5. Update to production timing after validation
+  </Accordion>
+
+  <Accordion title="Use Descriptive Names">
+    Schedule names should indicate:
+    - What's being backed up
+    - Frequency
+    - Purpose
+
+    Good examples:
+    - "Hourly Database Snapshots"
+    - "Daily Full Server Backup"
+    - "Weekly Offsite Sync"
+
+    Avoid generic names like "Backup 1", "Test", "Schedule".
+  </Accordion>
+
+  <Accordion title="Set Appropriate Retention">
+    Balance between:
+    - **Disk space**: More archives = more storage
+    - **Recovery granularity**: More frequent backups = better point-in-time recovery
+    - **Compliance**: Regulatory requirements for retention periods
+
+    Start conservative, adjust based on usage patterns.
+  </Accordion>
+
+  <Accordion title="Monitor Schedule Health">
+    Regularly review:
+    - Failed backup jobs
+    - Growing repository sizes
+    - Schedule drift (jobs taking longer than interval)
+    - Hook execution times
+
+    Set up alerts for failures and warnings.
+  </Accordion>
+
+  <Accordion title="Document Schedule Purpose">
+    Use the **Description** field to document:
+    - Business requirements
+    - Change history
+    - Special considerations
+    - Contact for issues
+
+    Example:
+    ```plaintext
+    Critical database backups for payment processing.
+    Required by compliance (7-year retention).
+    Contact: dba-team@example.com
+    Last updated: 2024-01-15
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Backup Scripts" icon="code" href="/guides/backup-scripts">
+    Add pre/post backup hooks to schedules
+  </Card>
+  <Card title="Notifications" icon="bell" href="/features/notifications">
+    Set up alerts for scheduled backups
+  </Card>
+  <Card title="Repository Maintenance" icon="wrench" href="/features/maintenance">
+    Optimize and verify scheduled backups
+  </Card>
+  <Card title="Remote Repositories" icon="server" href="/guides/remote-repositories">
+    Schedule backups to remote storage
+  </Card>
+</CardGroup>

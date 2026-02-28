@@ -1,0 +1,529 @@
+---
+title: "Backup Management"
+description: "Create and monitor backups with real-time progress tracking, detailed metrics, and comprehensive logging"
+---
+
+## Overview
+
+Borg UI provides powerful backup management with live progress tracking, showing real-time metrics including current file being processed, backup speed, compression ratios, and estimated time remaining.
+
+## Live Progress Tracking
+
+Watch your backups execute with detailed real-time metrics:
+
+```python
+# From backup.py:113-123
+"progress_details": {
+    "original_size": job.original_size or 0,
+    "compressed_size": job.compressed_size or 0,
+    "deduplicated_size": job.deduplicated_size or 0,
+    "nfiles": job.nfiles or 0,
+    "current_file": job.current_file or "",
+    "progress_percent": job.progress_percent or 0,
+    "backup_speed": job.backup_speed or 0.0,
+    "total_expected_size": job.total_expected_size or 0,
+    "estimated_time_remaining": job.estimated_time_remaining or 0
+}
+```
+
+<Note>
+  Progress tracking uses Borg's `--progress` flag to parse JSON output in real-time, providing sub-second updates during backup operations.
+</Note>
+
+## Starting a Backup
+
+<Steps>
+  <Step title="Manual Backup">
+    Start a one-time backup from the repository page:
+
+    ```bash
+    POST /api/backup/start
+    ```
+
+    **Request:**
+    ```json
+    {
+      "repository": "ssh://user@backup.example.com/backups/prod"
+    }
+    ```
+
+    **Response:**
+    ```json
+    {
+      "job_id": 123,
+      "status": "pending",
+      "message": "Backup job started"
+    }
+    ```
+
+    ```python
+    # From backup.py:28-72
+    @router.post("/start", response_model=BackupResponse)
+    async def start_backup(
+        backup_request: BackupRequest,
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db)
+    ):
+        # Create backup job record
+        backup_job = BackupJob(
+            repository=backup_request.repository or "default",
+            status="pending",
+            source_ssh_connection_id=repo_record.source_ssh_connection_id
+        )
+        db.add(backup_job)
+        db.commit()
+        
+        # Execute backup asynchronously (non-blocking)
+        asyncio.create_task(
+            backup_service.execute_backup(
+                backup_job.id,
+                backup_request.repository,
+                None  # Create new session for background task
+            )
+        )
+    ```
+  </Step>
+
+  <Step title="Monitor Progress">
+    Track backup progress in real-time:
+
+    ```bash
+    GET /api/backup/status/{job_id}
+    ```
+
+    **Response:**
+    ```json
+    {
+      "id": 123,
+      "repository": "ssh://user@backup.example.com/backups/prod",
+      "status": "running",
+      "started_at": "2026-02-28T10:30:00Z",
+      "progress": "Processing files...",
+      "progress_details": {
+        "original_size": 524288000,
+        "compressed_size": 314572800,
+        "deduplicated_size": 104857600,
+        "nfiles": 1250,
+        "current_file": "/var/www/uploads/image.jpg",
+        "progress_percent": 67.5,
+        "backup_speed": 15.2,
+        "estimated_time_remaining": 120
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="View Completion">
+    Once complete, view backup statistics and logs:
+
+    ```json
+    {
+      "id": 123,
+      "status": "completed",
+      "completed_at": "2026-02-28T10:45:30Z",
+      "progress_details": {
+        "original_size": 1073741824,
+        "compressed_size": 644245094,
+        "deduplicated_size": 214748364,
+        "nfiles": 2500
+      }
+    }
+    ```
+  </Step>
+</Steps>
+
+## Progress Metrics Explained
+
+<Accordion title="Original Size">
+  **Total size of data before compression**
+
+  - Raw file sizes from filesystem
+  - Before any compression or deduplication
+  - Indicates total data processed
+
+  ```python
+  original_size: job.original_size or 0  # Bytes
+  ```
+</Accordion>
+
+<Accordion title="Compressed Size">
+  **Size after compression algorithm**
+
+  - After lz4/zstd/zlib/lzma compression
+  - Before deduplication
+  - Shows compression effectiveness
+
+  ```python
+  compressed_size: job.compressed_size or 0  # Bytes
+  ```
+
+  **Compression Ratio:**
+  ```
+  ratio = original_size / compressed_size
+  # Example: 1GB → 600MB = 1.67x compression
+  ```
+</Accordion>
+
+<Accordion title="Deduplicated Size">
+  **Actual storage space used**
+
+  - After compression and deduplication
+  - Eliminates duplicate chunks across archives
+  - Final storage footprint
+
+  ```python
+  deduplicated_size: job.deduplicated_size or 0  # Bytes
+  ```
+
+  **Space Savings:**
+  ```
+  savings = 1 - (deduplicated_size / original_size)
+  # Example: 1GB → 200MB = 80% savings
+  ```
+</Accordion>
+
+<Accordion title="Backup Speed">
+  **Current processing rate**
+
+  - Measured in MB/s
+  - Real-time throughput
+  - Varies based on file types and compression
+
+  ```python
+  backup_speed: job.backup_speed or 0.0  # MB/s
+  ```
+</Accordion>
+
+<Accordion title="Estimated Time Remaining">
+  **Predicted completion time**
+
+  - Based on current speed
+  - Updates dynamically
+  - Measured in seconds
+
+  ```python
+  estimated_time_remaining: job.estimated_time_remaining or 0  # Seconds
+  ```
+</Accordion>
+
+## Backup Jobs API
+
+### Get All Backup Jobs
+
+```bash
+GET /api/backup/jobs?limit=200&scheduled_only=false&manual_only=false
+```
+
+**Query Parameters:**
+- `limit`: Maximum number of jobs to return (default: 200)
+- `scheduled_only`: Filter to scheduled jobs only
+- `manual_only`: Filter to manual backups only
+
+```python
+# From backup.py:74-133
+@router.get("/jobs")
+async def get_all_backup_jobs(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    limit: int = 200,
+    scheduled_only: bool = False,
+    manual_only: bool = False
+):
+    query = db.query(BackupJob)
+    
+    if scheduled_only:
+        query = query.filter(BackupJob.scheduled_job_id.isnot(None))
+    elif manual_only:
+        query = query.filter(BackupJob.scheduled_job_id.is_(None))
+    
+    jobs = query.order_by(BackupJob.id.desc()).limit(limit).all()
+```
+
+**Response:**
+```json
+{
+  "jobs": [
+    {
+      "id": 123,
+      "repository": "ssh://user@backup.example.com/backups/prod",
+      "status": "completed",
+      "started_at": "2026-02-28T10:30:00Z",
+      "completed_at": "2026-02-28T10:45:30Z",
+      "progress": "Backup completed successfully",
+      "has_logs": false,
+      "scheduled_job_id": null,
+      "progress_details": {
+        "original_size": 1073741824,
+        "compressed_size": 644245094,
+        "deduplicated_size": 214748364,
+        "nfiles": 2500,
+        "progress_percent": 100
+      }
+    }
+  ]
+}
+```
+
+## Canceling Backups
+
+Stop a running backup gracefully:
+
+```bash
+POST /api/backup/cancel/{job_id}
+```
+
+```python
+# From backup.py:180-226
+@router.post("/cancel/{job_id}")
+async def cancel_backup(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    job = db.query(BackupJob).filter(BackupJob.id == job_id).first()
+    
+    if job.status != "running":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Can only cancel running jobs"
+        )
+    
+    # Try to terminate the actual process
+    process_killed = await backup_service.cancel_backup(job_id)
+    
+    # Update job status in database
+    job.status = "cancelled"
+    job.completed_at = datetime.utcnow()
+    job.error_message = "Backup cancelled by user"
+    db.commit()
+```
+
+**Response:**
+```json
+{
+  "message": "Backup cancelled successfully",
+  "process_terminated": true
+}
+```
+
+<Warning>
+  Canceling a backup mid-operation is safe - Borg ensures repository consistency. However, the partially created archive may remain until pruned.
+</Warning>
+
+## Backup Logs
+
+### Stream Logs in Real-Time
+
+```bash
+GET /api/backup/logs/{job_id}/stream?offset=0
+```
+
+```python
+# From backup.py:332-418
+@router.get("/logs/{job_id}/stream")
+async def stream_backup_logs(
+    job_id: int,
+    offset: int = 0,  # Line number to start from
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    job = db.query(BackupJob).filter(BackupJob.id == job_id).first()
+    
+    # Check if logs point to a file
+    if job.logs.startswith("Logs saved to:"):
+        log_filename = job.logs.replace("Logs saved to: ", "").strip()
+        log_file = Path("/data/logs") / log_filename
+        
+        log_content = log_file.read_text()
+        log_lines = log_content.split('\n')
+        
+        # Apply offset for streaming
+        lines_to_return = log_lines[offset:]
+```
+
+**Response:**
+```json
+{
+  "job_id": 123,
+  "status": "running",
+  "lines": [
+    {"line_number": 1, "content": "Starting backup..."},
+    {"line_number": 2, "content": "Processing /var/www"}
+  ],
+  "total_lines": 150,
+  "has_more": true
+}
+```
+
+### Download Complete Logs
+
+```bash
+GET /api/backup/logs/{job_id}/download?token=<auth_token>
+```
+
+```python
+# From backup.py:228-330
+@router.get("/logs/{job_id}/download")
+async def download_backup_logs(
+    job_id: int,
+    token: str = None,
+    db: Session = Depends(get_db)
+):
+    # Only allow download for completed failed/cancelled backups
+    if job.status == "running":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot download logs for running backup"
+        )
+    
+    # Return file as download
+    return FileResponse(
+        path=str(log_file),
+        filename=f"backup_job_{job_id}_logs.txt",
+        media_type="text/plain"
+    )
+```
+
+<Note>
+  Logs are only saved for failed or cancelled backups to optimize storage. Successful backups don't generate log files.
+</Note>
+
+## Pre/Post Backup Hooks
+
+Run custom scripts before and after backups:
+
+```python
+# Repository configuration
+{
+  "pre_backup_script": "#!/bin/bash\ndocker stop webapp",
+  "post_backup_script": "#!/bin/bash\ndocker start webapp",
+  "pre_hook_timeout": 300,   // 5 minutes
+  "post_hook_timeout": 300,  // 5 minutes
+  "continue_on_hook_failure": false
+}
+```
+
+**Common Use Cases:**
+
+<Accordion title="Stop Services">
+  **Ensure consistent backups**
+
+  ```bash
+  #!/bin/bash
+  # Pre-backup: Stop services
+  docker-compose stop webapp
+  systemctl stop nginx
+  ```
+
+  ```bash
+  #!/bin/bash
+  # Post-backup: Restart services
+  systemctl start nginx
+  docker-compose start webapp
+  ```
+</Accordion>
+
+<Accordion title="Database Dumps">
+  **Backup databases before filesystem backup**
+
+  ```bash
+  #!/bin/bash
+  # Pre-backup: Dump databases
+  mysqldump -u root -p${MYSQL_PASSWORD} --all-databases > /backup/mysql.sql
+  pg_dumpall -U postgres > /backup/postgres.sql
+  ```
+
+  ```bash
+  #!/bin/bash
+  # Post-backup: Clean up dumps
+  rm -f /backup/*.sql
+  ```
+</Accordion>
+
+<Accordion title="Snapshot Volumes">
+  **Create LVM snapshots**
+
+  ```bash
+  #!/bin/bash
+  # Pre-backup: Create snapshot
+  lvcreate -L 10G -s -n backup-snap /dev/vg0/data
+  mount /dev/vg0/backup-snap /mnt/snapshot
+  ```
+
+  ```bash
+  #!/bin/bash
+  # Post-backup: Remove snapshot
+  umount /mnt/snapshot
+  lvremove -f /dev/vg0/backup-snap
+  ```
+</Accordion>
+
+## Maintenance Operations
+
+Backups can trigger automatic maintenance:
+
+```python
+# Scheduled job configuration
+{
+  "run_prune_after": true,
+  "run_compact_after": true,
+  "prune_keep_daily": 7,
+  "prune_keep_weekly": 4,
+  "prune_keep_monthly": 6,
+  "prune_keep_yearly": 1
+}
+```
+
+**Maintenance Status Tracking:**
+```python
+# From backup.py:159
+"maintenance_status": job.maintenance_status
+```
+
+<Card title="Backup Performance Tips" icon="rocket">
+  - **Compression**: Use lz4 for speed, zstd for balance, lzma for maximum compression
+  - **Exclusions**: Skip cache files, logs, and temporary data
+  - **Scheduling**: Run during off-peak hours for large backups
+  - **Hooks**: Keep pre-backup hooks fast to minimize downtime
+  - **Deduplication**: Borg's chunking works best with unchanged files
+  - **Network**: Use compression for remote backups over slow connections
+</Card>
+
+## Remote Source Backups
+
+Pull data from remote servers for backup:
+
+```python
+# From backup.py:36-46
+repo_record = db.query(Repository).filter(
+    Repository.path == backup_request.repository
+).first()
+
+backup_job = BackupJob(
+    repository=backup_request.repository,
+    status="pending",
+    source_ssh_connection_id=repo_record.source_ssh_connection_id
+)
+```
+
+**Use Case:**
+Backup remote servers to local storage by pulling data over SSH.
+
+## Error Handling
+
+Borg UI captures and categorizes backup errors:
+
+```json
+{
+  "status": "failed",
+  "error_message": "Lock timeout: another operation is running",
+  "logs": "Logs saved to: backup_123_20260228_103000.log"
+}
+```
+
+**Common Errors:**
+- Lock timeout: Another backup is running
+- Permission denied: Check file permissions
+- Connection refused: Verify SSH connectivity
+- Passphrase incorrect: Verify repository passphrase
+- Disk full: Check available storage space

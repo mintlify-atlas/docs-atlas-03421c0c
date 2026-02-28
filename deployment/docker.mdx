@@ -1,0 +1,372 @@
+---
+title: 'Docker Deployment'
+description: 'Deploy Borg UI using Docker with docker run command'
+icon: 'docker'
+---
+
+## Quick Start
+
+The simplest way to get started with Borg UI is using Docker. This method is ideal for testing or simple deployments.
+
+```bash
+docker run -d \
+  --name borg-web-ui \
+  -p 8081:8081 \
+  -v borg_data:/data \
+  -v borg_cache:/home/borg/.cache/borg \
+  -v /home/yourusername:/local:rw \
+  ainullcode/borg-ui:latest
+```
+
+<Info>
+Access the web interface at `http://localhost:8081`
+
+Default credentials: `admin` / `admin123`
+</Info>
+
+## Port Configuration
+
+By default, Borg UI runs on port 8081. You can change this using the `PORT` environment variable:
+
+```bash
+docker run -d \
+  --name borg-web-ui \
+  -p 3000:3000 \
+  -e PORT=3000 \
+  -v borg_data:/data \
+  -v borg_cache:/home/borg/.cache/borg \
+  -v /home/yourusername:/local:rw \
+  ainullcode/borg-ui:latest
+```
+
+## Volume Mounts Explained
+
+### Application Data
+
+```bash
+-v borg_data:/data
+```
+
+Stores all persistent application data:
+- SQLite database (`borg.db`)
+- SSH keys
+- Borg encryption keys
+- Application logs
+- Configuration files
+- Auto-generated `SECRET_KEY`
+
+### Borg Cache
+
+```bash
+-v borg_cache:/home/borg/.cache/borg
+```
+
+Improves backup performance by caching repository metadata. This significantly speeds up backup operations on subsequent runs.
+
+### Host Filesystem Access
+
+```bash
+-v /home/yourusername:/local:rw
+```
+
+<Warning>
+Replace `/home/yourusername` with the actual directory you want to backup on your host system.
+</Warning>
+
+This mount gives Borg UI access to files on your host machine. The host directory is mounted at `/local` inside the container.
+
+**Production examples:**
+
+<CodeGroup>
+
+```bash Single directory
+docker run -d \
+  --name borg-web-ui \
+  -p 8081:8081 \
+  -v borg_data:/data \
+  -v borg_cache:/home/borg/.cache/borg \
+  -v /home/username:/local:rw \
+  ainullcode/borg-ui:latest
+```
+
+```bash Multiple directories
+docker run -d \
+  --name borg-web-ui \
+  -p 8081:8081 \
+  -v borg_data:/data \
+  -v borg_cache:/home/borg/.cache/borg \
+  -v /home/username:/home:rw \
+  -v /var/www:/www:ro \
+  -v /mnt/data:/data:rw \
+  -e LOCAL_MOUNT_POINTS=/home,/www,/data \
+  ainullcode/borg-ui:latest
+```
+
+```bash Read-only access
+docker run -d \
+  --name borg-web-ui \
+  -p 8081:8081 \
+  -v borg_data:/data \
+  -v borg_cache:/home/borg/.cache/borg \
+  -v /var/www:/www:ro \
+  ainullcode/borg-ui:latest
+```
+
+</CodeGroup>
+
+<Note>
+When using custom mount paths (not `/local`), set the `LOCAL_MOUNT_POINTS` environment variable to help the UI detect available directories:
+
+```bash
+-e LOCAL_MOUNT_POINTS=/home,/www,/data
+```
+</Note>
+
+### Timezone Synchronization
+
+```bash
+-v /etc/localtime:/etc/localtime:ro
+```
+
+Syncs the container timezone with your host system. This ensures correct timestamps in backup archives and logs.
+
+Alternatively, set the timezone via environment variable:
+
+```bash
+-e TZ=America/New_York
+```
+
+### Docker Socket (Optional)
+
+```bash
+-v /var/run/docker.sock:/var/run/docker.sock:rw
+```
+
+Required only if you want to stop/start Docker containers during backups using pre/post backup scripts.
+
+## Environment Variables
+
+### Core Settings
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8081` | Web interface port |
+| `ENVIRONMENT` | `production` | Application environment mode |
+| `LOG_LEVEL` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL) |
+
+### User/Group IDs
+
+```bash
+-e PUID=1001 \
+-e PGID=1001
+```
+
+Set these to match your host user's UID/GID for proper file permissions. Find yours with:
+
+```bash
+id -u && id -g
+```
+
+### Timezone
+
+```bash
+-e TZ=America/New_York
+```
+
+Common timezones:
+- `America/New_York`
+- `America/Chicago`
+- `America/Los_Angeles`
+- `Europe/London`
+- `Europe/Paris`
+- `Asia/Kolkata`
+- `Asia/Tokyo`
+
+### Security
+
+```bash
+-e SECRET_KEY=your-custom-secret-key
+-e INITIAL_ADMIN_PASSWORD=your-secure-password
+```
+
+<Warning>
+If not set, `SECRET_KEY` is auto-generated and persisted to `/data/.secret_key`. For production deployments, it's recommended to set a custom secret key.
+</Warning>
+
+### Borg Timeouts
+
+For large repositories with long cache build times:
+
+```bash
+-e BORG_INFO_TIMEOUT=600 \
+-e BORG_LIST_TIMEOUT=600 \
+-e BORG_INIT_TIMEOUT=300 \
+-e BORG_EXTRACT_TIMEOUT=3600 \
+-e SCRIPT_TIMEOUT=120
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BORG_INFO_TIMEOUT` | `600` | borg info operations (10 min) |
+| `BORG_LIST_TIMEOUT` | `600` | borg list operations (10 min) |
+| `BORG_INIT_TIMEOUT` | `300` | borg init operations (5 min) |
+| `BORG_EXTRACT_TIMEOUT` | `3600` | borg extract operations (1 hour) |
+| `SCRIPT_TIMEOUT` | `120` | Pre/post backup scripts (2 min) |
+
+### Disable Authentication
+
+```bash
+-e DISABLE_AUTHENTICATION=true
+```
+
+<Warning>
+Only use this in secure, private networks. Not recommended for production.
+</Warning>
+
+## Complete Example
+
+Production deployment with all recommended settings:
+
+```bash
+docker run -d \
+  --name borg-web-ui \
+  --restart unless-stopped \
+  -p 8081:8081 \
+  -v borg_data:/data \
+  -v borg_cache:/home/borg/.cache/borg \
+  -v /etc/localtime:/etc/localtime:ro \
+  -v /home/username:/local:rw \
+  -e PUID=$(id -u) \
+  -e PGID=$(id -g) \
+  -e TZ=America/New_York \
+  -e INITIAL_ADMIN_PASSWORD=MySecurePassword123! \
+  ainullcode/borg-ui:latest
+```
+
+## Multi-Architecture Support
+
+Borg UI supports the following architectures:
+- `amd64` (x86_64)
+- `arm64` (aarch64)
+- `armv7` (32-bit ARM)
+
+Docker automatically pulls the correct image for your platform.
+
+## Updating
+
+To update to the latest version:
+
+<Steps>
+
+<Step title="Pull the latest image">
+```bash
+docker pull ainullcode/borg-ui:latest
+```
+</Step>
+
+<Step title="Stop and remove the old container">
+```bash
+docker stop borg-web-ui
+docker rm borg-web-ui
+```
+</Step>
+
+<Step title="Start with the new image">
+Run your original `docker run` command again. All data is preserved in the volumes.
+</Step>
+
+</Steps>
+
+## Managing the Container
+
+### View logs
+
+```bash
+docker logs borg-web-ui
+```
+
+### Follow logs in real-time
+
+```bash
+docker logs -f borg-web-ui
+```
+
+### Stop the container
+
+```bash
+docker stop borg-web-ui
+```
+
+### Start the container
+
+```bash
+docker start borg-web-ui
+```
+
+### Restart the container
+
+```bash
+docker restart borg-web-ui
+```
+
+### Access container shell
+
+```bash
+docker exec -it borg-web-ui bash
+```
+
+## Troubleshooting
+
+### Permission Issues
+
+If you encounter permission errors accessing host files:
+
+1. Check your PUID/PGID match your host user:
+   ```bash
+   id -u && id -g
+   ```
+
+2. Verify volume mount permissions:
+   ```bash
+   ls -la /home/yourusername
+   ```
+
+3. Restart container with correct PUID/PGID:
+   ```bash
+   docker stop borg-web-ui
+   docker rm borg-web-ui
+   # Run docker run command with correct -e PUID and -e PGID
+   ```
+
+### Port Already in Use
+
+If port 8081 is already in use:
+
+```bash
+# Use a different host port
+docker run -d \
+  --name borg-web-ui \
+  -p 8082:8081 \
+  # ... rest of command
+```
+
+Or change both host and container ports:
+
+```bash
+docker run -d \
+  --name borg-web-ui \
+  -p 3000:3000 \
+  -e PORT=3000 \
+  # ... rest of command
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Docker Compose" icon="layer-group" href="/deployment/docker-compose">
+    Recommended method for production deployments
+  </Card>
+  <Card title="Reverse Proxy" icon="network-wired" href="/deployment/reverse-proxy">
+    Run behind Nginx or Traefik
+  </Card>
+</CardGroup>

@@ -1,0 +1,756 @@
+---
+title: 'Reverse Proxy Setup'
+description: 'Run Borg UI behind Nginx or Traefik reverse proxy'
+icon: 'network-wired'
+---
+
+## Overview
+
+Running Borg UI behind a reverse proxy enables:
+
+- SSL/TLS encryption (HTTPS)
+- Custom domains (e.g., `backups.yourdomain.com`)
+- Subfolder deployment (e.g., `yourdomain.com/borg`)
+- Additional security features
+- Integration with existing infrastructure
+
+## Nginx
+
+### Root Path Configuration
+
+For serving Borg UI at the root of a domain (`backups.yourdomain.com`):
+
+```nginx
+server {
+    listen 80;
+    server_name backups.yourdomain.com;
+
+    # Redirect HTTP to HTTPS
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name backups.yourdomain.com;
+
+    # SSL configuration
+    ssl_certificate /etc/nginx/ssl/cert.pem;
+    ssl_certificate_key /etc/nginx/ssl/key.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+
+    # Security headers
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    location / {
+        proxy_pass http://localhost:8081;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # WebSocket support (for real-time updates)
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # Timeouts for long-running operations
+        proxy_connect_timeout 600;
+        proxy_send_timeout 600;
+        proxy_read_timeout 600;
+        send_timeout 600;
+    }
+
+    # Increase client max body size for file uploads/restores
+    client_max_body_size 1G;
+}
+```
+
+### Subfolder Configuration
+
+For serving Borg UI in a subfolder (`yourdomain.com/borg`):
+
+<Steps>
+
+<Step title="Configure BASE_PATH in Borg UI">
+Set the `BASE_PATH` environment variable:
+
+**Docker:**
+```bash
+docker run -d \
+  -e BASE_PATH=/borg \
+  # ... other options
+  ainullcode/borg-ui:latest
+```
+
+**Docker Compose:**
+```yaml
+services:
+  app:
+    environment:
+      - BASE_PATH=/borg
+```
+
+**Unraid:**
+Add environment variable:
+```
+Key: BASE_PATH
+Value: /borg
+```
+
+<Warning>
+- Must start with `/` (e.g., `/borg` not `borg`)
+- No trailing slash (e.g., `/borg` not `/borg/`)
+- Rebuild container after setting: `docker-compose up -d --build`
+</Warning>
+</Step>
+
+<Step title="Configure Nginx">
+```nginx
+server {
+    listen 80;
+    server_name yourdomain.com;
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name yourdomain.com;
+
+    # SSL configuration
+    ssl_certificate /etc/nginx/ssl/cert.pem;
+    ssl_certificate_key /etc/nginx/ssl/key.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+
+    location /borg/ {
+        proxy_pass http://localhost:8081/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # WebSocket support
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # Timeouts
+        proxy_connect_timeout 600;
+        proxy_send_timeout 600;
+        proxy_read_timeout 600;
+        send_timeout 600;
+    }
+
+    client_max_body_size 1G;
+}
+```
+
+<Info>
+Note the trailing slash in `proxy_pass http://localhost:8081/;` - this is required for subfolder setups.
+</Info>
+</Step>
+
+<Step title="Test and reload">
+```bash
+nginx -t
+systemctl reload nginx
+```
+</Step>
+
+</Steps>
+
+### Nginx Proxy Manager
+
+Popular with Unraid users and home lab setups:
+
+<Steps>
+
+<Step title="Add Proxy Host">
+1. Open Nginx Proxy Manager interface
+2. Click **Proxy Hosts** → **Add Proxy Host**
+</Step>
+
+<Step title="Configure Details tab">
+```
+Domain Names: backups.yourdomain.com
+Scheme: http
+Forward Hostname/IP: [Borg UI container IP or hostname]
+Forward Port: 8081
+
+✓ Block Common Exploits
+✓ Websockets Support
+```
+</Step>
+
+<Step title="Configure SSL tab">
+```
+SSL Certificate: Request a new SSL Certificate
+Force SSL: On
+HTTP/2 Support: On
+HSTS Enabled: On
+```
+
+Or use existing certificate if available.
+</Step>
+
+<Step title="Configure Advanced tab">
+```nginx
+proxy_connect_timeout 600;
+proxy_send_timeout 600;
+proxy_read_timeout 600;
+send_timeout 600;
+client_max_body_size 1G;
+```
+</Step>
+
+<Step title="Save and test">
+Save the proxy host and access `https://backups.yourdomain.com`
+</Step>
+
+</Steps>
+
+#### Subfolder with NPM
+
+For subfolder deployment (`yourdomain.com/borg`):
+
+1. Set `BASE_PATH=/borg` in Borg UI container (see above)
+2. In NPM Proxy Host:
+   ```
+   Domain Names: yourdomain.com
+   Forward Hostname/IP: [Borg UI IP]
+   Forward Port: 8081
+   ```
+3. In **Advanced** tab:
+   ```nginx
+   location /borg/ {
+       proxy_pass http://[BORG_UI_IP]:8081/;
+       proxy_set_header Host $host;
+       proxy_set_header X-Real-IP $remote_addr;
+       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+       proxy_set_header X-Forwarded-Proto $scheme;
+       
+       proxy_http_version 1.1;
+       proxy_set_header Upgrade $http_upgrade;
+       proxy_set_header Connection "upgrade";
+       
+       proxy_connect_timeout 600;
+       proxy_send_timeout 600;
+       proxy_read_timeout 600;
+   }
+   ```
+
+## Traefik
+
+### Root Path Configuration
+
+Using Docker labels for Traefik v2/v3:
+
+```yaml docker-compose.yml
+services:
+  app:
+    image: ainullcode/borg-ui:latest
+    container_name: borg-web-ui
+    restart: unless-stopped
+    
+    networks:
+      - traefik
+      - borg_network
+    
+    labels:
+      - "traefik.enable=true"
+      
+      # HTTP router
+      - "traefik.http.routers.borg-ui.rule=Host(`backups.yourdomain.com`)"
+      - "traefik.http.routers.borg-ui.entrypoints=web"
+      - "traefik.http.routers.borg-ui.middlewares=borg-ui-https-redirect"
+      
+      # HTTPS router
+      - "traefik.http.routers.borg-ui-secure.rule=Host(`backups.yourdomain.com`)"
+      - "traefik.http.routers.borg-ui-secure.entrypoints=websecure"
+      - "traefik.http.routers.borg-ui-secure.tls=true"
+      - "traefik.http.routers.borg-ui-secure.tls.certresolver=letsencrypt"
+      
+      # Service
+      - "traefik.http.services.borg-ui.loadbalancer.server.port=8081"
+      
+      # Middleware - HTTPS redirect
+      - "traefik.http.middlewares.borg-ui-https-redirect.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.borg-ui-https-redirect.redirectscheme.permanent=true"
+      
+      # Security headers
+      - "traefik.http.middlewares.borg-ui-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.borg-ui-headers.headers.stsIncludeSubdomains=true"
+      - "traefik.http.middlewares.borg-ui-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.borg-ui-headers.headers.browserXssFilter=true"
+      - "traefik.http.middlewares.borg-ui-headers.headers.frameDeny=true"
+      
+      - "traefik.http.routers.borg-ui-secure.middlewares=borg-ui-headers"
+
+    # ... volumes, environment, etc.
+
+networks:
+  traefik:
+    external: true
+  borg_network:
+    driver: bridge
+```
+
+### Subfolder Configuration
+
+<Steps>
+
+<Step title="Set BASE_PATH">
+```yaml
+environment:
+  - BASE_PATH=/borg
+```
+</Step>
+
+<Step title="Configure Traefik labels">
+```yaml
+labels:
+  - "traefik.enable=true"
+  
+  # HTTP router
+  - "traefik.http.routers.borg-ui.rule=Host(`yourdomain.com`) && PathPrefix(`/borg`)"
+  - "traefik.http.routers.borg-ui.entrypoints=web"
+  - "traefik.http.routers.borg-ui.middlewares=borg-ui-https-redirect"
+  
+  # HTTPS router
+  - "traefik.http.routers.borg-ui-secure.rule=Host(`yourdomain.com`) && PathPrefix(`/borg`)"
+  - "traefik.http.routers.borg-ui-secure.entrypoints=websecure"
+  - "traefik.http.routers.borg-ui-secure.tls=true"
+  - "traefik.http.routers.borg-ui-secure.tls.certresolver=letsencrypt"
+  
+  # Strip prefix middleware
+  - "traefik.http.middlewares.borg-ui-stripprefix.stripprefix.prefixes=/borg"
+  
+  # Service
+  - "traefik.http.services.borg-ui.loadbalancer.server.port=8081"
+  
+  # HTTPS redirect
+  - "traefik.http.middlewares.borg-ui-https-redirect.redirectscheme.scheme=https"
+  
+  # Combine middlewares
+  - "traefik.http.routers.borg-ui-secure.middlewares=borg-ui-stripprefix,borg-ui-headers"
+```
+</Step>
+
+<Step title="Rebuild container">
+```bash
+docker-compose up -d --build
+```
+</Step>
+
+</Steps>
+
+### Traefik File Configuration
+
+Alternatively, using `traefik.yml` or dynamic configuration:
+
+```yaml traefik-dynamic.yml
+http:
+  routers:
+    borg-ui:
+      rule: "Host(`backups.yourdomain.com`)"
+      entryPoints:
+        - websecure
+      service: borg-ui
+      tls:
+        certResolver: letsencrypt
+      middlewares:
+        - borg-ui-headers
+
+  services:
+    borg-ui:
+      loadBalancer:
+        servers:
+          - url: "http://localhost:8081"
+        passHostHeader: true
+
+  middlewares:
+    borg-ui-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        contentTypeNosniff: true
+        browserXssFilter: true
+        frameDeny: true
+```
+
+## Caddy
+
+### Root Path Configuration
+
+```caddy Caddyfile
+backups.yourdomain.com {
+    reverse_proxy localhost:8081 {
+        # WebSocket support
+        header_up Upgrade {http.request.header.Upgrade}
+        header_up Connection {http.request.header.Connection}
+        
+        # Timeouts for long operations
+        transport http {
+            dial_timeout 600s
+            response_header_timeout 600s
+            read_timeout 600s
+            write_timeout 600s
+        }
+    }
+    
+    # Security headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        X-XSS-Protection "1; mode=block"
+    }
+    
+    # Request size limit
+    request_body {
+        max_size 1GB
+    }
+}
+```
+
+### Subfolder Configuration
+
+```caddy Caddyfile
+yourdomain.com {
+    # Set BASE_PATH=/borg in Borg UI first
+    
+    handle_path /borg/* {
+        reverse_proxy localhost:8081 {
+            header_up Upgrade {http.request.header.Upgrade}
+            header_up Connection {http.request.header.Connection}
+            
+            transport http {
+                dial_timeout 600s
+                response_header_timeout 600s
+                read_timeout 600s
+                write_timeout 600s
+            }
+        }
+    }
+    
+    header /borg/* {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        X-XSS-Protection "1; mode=block"
+    }
+}
+```
+
+## Apache
+
+### Root Path Configuration
+
+```apache
+<VirtualHost *:80>
+    ServerName backups.yourdomain.com
+    Redirect permanent / https://backups.yourdomain.com/
+</VirtualHost>
+
+<VirtualHost *:443>
+    ServerName backups.yourdomain.com
+    
+    SSLEngine on
+    SSLCertificateFile /etc/ssl/certs/cert.pem
+    SSLCertificateKeyFile /etc/ssl/private/key.pem
+    
+    # Security headers
+    Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set X-XSS-Protection "1; mode=block"
+    
+    ProxyPreserveHost On
+    ProxyPass / http://localhost:8081/
+    ProxyPassReverse / http://localhost:8081/
+    
+    # WebSocket support
+    RewriteEngine On
+    RewriteCond %{HTTP:Upgrade} =websocket [NC]
+    RewriteRule /(.*)           ws://localhost:8081/$1 [P,L]
+    
+    # Timeouts
+    ProxyTimeout 600
+    
+    # Request size limit
+    LimitRequestBody 1073741824
+</VirtualHost>
+```
+
+Enable required modules:
+
+```bash
+a2enmod proxy proxy_http proxy_wstunnel rewrite headers ssl
+systemctl restart apache2
+```
+
+### Subfolder Configuration
+
+```apache
+<VirtualHost *:443>
+    ServerName yourdomain.com
+    
+    # SSL configuration...
+    
+    # Set BASE_PATH=/borg in Borg UI first
+    
+    <Location /borg>
+        ProxyPreserveHost On
+        ProxyPass http://localhost:8081/
+        ProxyPassReverse http://localhost:8081/
+        
+        # WebSocket support
+        RewriteEngine On
+        RewriteCond %{HTTP:Upgrade} =websocket [NC]
+        RewriteRule /borg/(.*)      ws://localhost:8081/$1 [P,L]
+    </Location>
+    
+    ProxyTimeout 600
+</VirtualHost>
+```
+
+## Configuration Summary
+
+### BASE_PATH Environment Variable
+
+| Deployment | Example | BASE_PATH Value |
+|------------|---------|------------------|
+| Root domain | `backups.domain.com` | Not needed (or `/`) |
+| Subfolder | `domain.com/borg` | `/borg` |
+| Subfolder | `domain.com/backup` | `/backup` |
+
+<Warning>
+**Important rules for BASE_PATH:**
+- Must start with `/` (e.g., `/borg` not `borg`)
+- No trailing slash (e.g., `/borg` not `/borg/`)
+- Requires container rebuild: `docker-compose up -d --build`
+</Warning>
+
+### Common Proxy Settings
+
+Essential headers for all reverse proxy configurations:
+
+```
+Proxy Headers:
+  Host: $host
+  X-Real-IP: $remote_addr
+  X-Forwarded-For: $proxy_add_x_forwarded_for
+  X-Forwarded-Proto: $scheme
+
+WebSocket Support:
+  Upgrade: $http_upgrade
+  Connection: "upgrade"
+  HTTP Version: 1.1
+
+Timeouts:
+  Connect: 600s
+  Send: 600s
+  Read: 600s
+
+Request Limits:
+  Max Body Size: 1GB
+```
+
+## Testing
+
+### Verify Configuration
+
+<Steps>
+
+<Step title="Test reverse proxy config">
+**Nginx:**
+```bash
+nginx -t
+```
+
+**Apache:**
+```bash
+apachectl configtest
+```
+
+**Caddy:**
+```bash
+caddy validate --config /etc/caddy/Caddyfile
+```
+</Step>
+
+<Step title="Check SSL certificate">
+```bash
+curl -I https://backups.yourdomain.com
+```
+
+Verify the certificate is valid and served correctly.
+</Step>
+
+<Step title="Test WebSocket connection">
+Open browser developer tools (F12) → Network tab → WS filter. Navigate to Borg UI and start a backup. You should see WebSocket connections for real-time updates.
+</Step>
+
+<Step title="Test large operations">
+Perform a backup or restore operation. Verify it doesn't timeout (600s should be sufficient for most operations).
+</Step>
+
+</Steps>
+
+## Troubleshooting
+
+### 502 Bad Gateway
+
+**Cause:** Reverse proxy can't reach Borg UI container.
+
+**Solutions:**
+1. Verify Borg UI is running:
+   ```bash
+   docker ps | grep borg-ui
+   ```
+
+2. Check if port 8081 is accessible:
+   ```bash
+   curl http://localhost:8081
+   ```
+
+3. Verify network connectivity between proxy and container
+
+4. Check proxy logs for connection errors
+
+### 404 Not Found (Subfolder Setup)
+
+**Cause:** BASE_PATH not configured correctly.
+
+**Solutions:**
+1. Verify `BASE_PATH` is set in container:
+   ```bash
+   docker exec borg-web-ui env | grep BASE_PATH
+   ```
+
+2. Ensure BASE_PATH starts with `/` and has no trailing slash
+
+3. Rebuild container after setting BASE_PATH:
+   ```bash
+   docker-compose up -d --build
+   ```
+
+4. Check proxy configuration matches BASE_PATH value
+
+### Static Assets Not Loading
+
+**Cause:** Incorrect proxy_pass configuration or missing BASE_PATH.
+
+**Solutions:**
+1. For subfolder setups, ensure trailing slash in proxy_pass:
+   ```nginx
+   # Correct:
+   location /borg/ {
+       proxy_pass http://localhost:8081/;
+   }
+   
+   # Incorrect:
+   location /borg/ {
+       proxy_pass http://localhost:8081;  # Missing trailing slash
+   }
+   ```
+
+2. Verify BASE_PATH is set and container rebuilt
+
+3. Check browser console for 404 errors on assets
+
+### WebSocket Connection Failed
+
+**Cause:** Missing WebSocket proxy headers.
+
+**Solutions:**
+1. Add WebSocket headers (see examples above)
+
+2. Verify HTTP version is 1.1:
+   ```nginx
+   proxy_http_version 1.1;
+   ```
+
+3. Check firewall allows WebSocket connections
+
+### Operation Timeouts
+
+**Cause:** Proxy timeout too short for long-running operations.
+
+**Solutions:**
+1. Increase proxy timeouts to 600s (see examples above)
+
+2. Increase Borg operation timeouts in container:
+   ```yaml
+   environment:
+     - BORG_EXTRACT_TIMEOUT=7200
+     - BORG_INFO_TIMEOUT=7200
+   ```
+
+3. Check both proxy and container logs for timeout errors
+
+## Security Best Practices
+
+<AccordionGroup>
+
+<Accordion title="Use Strong SSL/TLS Configuration">
+- Use TLS 1.2 or higher
+- Disable weak ciphers
+- Enable HSTS
+- Use valid SSL certificates (Let's Encrypt recommended)
+- Enable HTTP/2 for better performance
+</Accordion>
+
+<Accordion title="Restrict Access">
+- Use firewall rules to limit access
+- Consider IP whitelisting for admin interface
+- Enable fail2ban for brute force protection
+- Use strong passwords
+- Consider adding HTTP basic auth at proxy level
+</Accordion>
+
+<Accordion title="Security Headers">
+Always include:
+- `Strict-Transport-Security`
+- `X-Content-Type-Options`
+- `X-Frame-Options`
+- `X-XSS-Protection`
+</Accordion>
+
+<Accordion title="Rate Limiting">
+Implement rate limiting at reverse proxy level:
+
+**Nginx:**
+```nginx
+limit_req_zone $binary_remote_addr zone=borg_ui:10m rate=10r/s;
+
+location / {
+    limit_req zone=borg_ui burst=20 nodelay;
+    # ... proxy settings
+}
+```
+
+**Traefik:**
+```yaml
+labels:
+  - "traefik.http.middlewares.borg-ui-ratelimit.ratelimit.average=10"
+  - "traefik.http.middlewares.borg-ui-ratelimit.ratelimit.burst=20"
+```
+</Accordion>
+
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Docker" icon="docker" href="/deployment/docker">
+    Simple deployment with docker run
+  </Card>
+  <Card title="Docker Compose" icon="layer-group" href="/deployment/docker-compose">
+    Recommended production setup
+  </Card>
+</CardGroup>

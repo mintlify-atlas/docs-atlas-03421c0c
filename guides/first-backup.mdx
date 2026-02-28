@@ -1,0 +1,265 @@
+---
+title: 'Creating Your First Backup'
+description: 'Step-by-step guide to setting up and running your first backup with Borg UI'
+---
+
+## Overview
+
+This guide walks you through creating your first backup with Borg UI, from setting up a repository to monitoring backup progress in real-time.
+
+## Prerequisites
+
+Before starting, ensure you have:
+- Borg UI installed and running
+- Access to the web interface (default: `http://localhost:8081`)
+- Default credentials: `admin` / `admin123`
+- A directory to store backups (local or remote)
+
+<Note>
+For production use, change the default password immediately after first login.
+</Note>
+
+## Step 1: Create a Repository
+
+A repository is where Borg stores your encrypted and deduplicated backup archives.
+
+<Steps>
+  <Step title="Navigate to Repositories">
+    Click **Repositories** in the sidebar to access the repository management page.
+  </Step>
+
+  <Step title="Click Create Repository">
+    Click the **Create Repository** button to open the repository creation dialog.
+  </Step>
+
+  <Step title="Configure Repository Settings">
+    Fill in the following fields:
+
+    - **Repository Name**: A friendly name (e.g., "Home Server Backups")
+    - **Path**: Where to store the repository
+      - Local: `/data/backups/my-repo` (inside container)
+      - Host filesystem: `/local/backups/my-repo` (maps to host)
+    - **Encryption**: Choose encryption mode
+      - `repokey`: Key stored in repository (recommended)
+      - `keyfile`: Key stored separately (more secure)
+      - `none`: No encryption (not recommended)
+    - **Passphrase**: Required for encrypted repositories
+    - **Compression**: Choose compression algorithm
+      - `lz4`: Fast, moderate compression (recommended)
+      - `zstd`: Balanced speed and compression
+      - `zlib`: Higher compression, slower
+      - `lzma`: Maximum compression, slowest
+  </Step>
+
+  <Step title="Add Source Directories">
+    Specify which directories to back up:
+
+    ```plaintext
+    /local/home/user/documents
+    /local/home/user/photos
+    /local/etc
+    ```
+
+    <Tip>
+    Use `/local/` prefix to access directories from your host machine. The container's `/` is mapped to `/local/` inside the container.
+    </Tip>
+  </Step>
+
+  <Step title="Add Exclude Patterns (Optional)">
+    Exclude files you don't want to back up:
+
+    ```plaintext
+    *.log
+    *.tmp
+    *~
+    .cache
+    node_modules
+    __pycache__
+    ```
+
+    <Note>
+    Exclude patterns support wildcards and follow Borg's pattern syntax.
+    </Note>
+  </Step>
+
+  <Step title="Create the Repository">
+    Click **Create Repository** to initialize the Borg repository. This process:
+    - Creates the repository directory structure
+    - Initializes encryption keys
+    - Stores configuration in the database
+  </Step>
+</Steps>
+
+## Step 2: Run Your First Backup
+
+Once the repository is created, you can start backing up your data.
+
+<Steps>
+  <Step title="Navigate to the Repository">
+    From the Repositories page, click on your newly created repository to view its details.
+  </Step>
+
+  <Step title="Start Manual Backup">
+    Click the **Backup Now** button to start an immediate backup.
+
+    The backup job is created with status "pending" and begins executing in the background.
+  </Step>
+
+  <Step title="Monitor Progress">
+    Borg UI displays real-time progress including:
+
+    - **Current file**: Path of the file being processed
+    - **Backup speed**: Transfer rate in MB/s
+    - **Files processed**: Number of files backed up
+    - **Data statistics**:
+      - Original size: Uncompressed data size
+      - Compressed size: After compression
+      - Deduplicated size: Actual space used (after deduplication)
+    - **Progress percentage**: Overall completion
+    - **Estimated time remaining**: Based on current speed
+
+    <Tip>
+    Borg's deduplication means subsequent backups are much faster and use minimal additional space.
+    </Tip>
+  </Step>
+
+  <Step title="View Backup Results">
+    When complete, the backup status changes to:
+    - **Completed**: Backup finished successfully
+    - **Completed with warnings**: Minor issues occurred
+    - **Failed**: Backup encountered errors
+
+    Click on the backup job to view detailed logs if needed.
+  </Step>
+</Steps>
+
+## Understanding Backup Progress
+
+Borg UI parses Borg's JSON output to provide real-time feedback:
+
+```json
+{
+  "original_size": 5368709120,
+  "compressed_size": 4294967296,
+  "deduplicated_size": 2147483648,
+  "nfiles": 12543,
+  "current_file": "/local/home/user/documents/report.pdf",
+  "progress_percent": 67.5,
+  "backup_speed": 45.2,
+  "estimated_time_remaining": 180
+}
+```
+
+## Pre/Post Backup Hooks
+
+You can run scripts before and after backups to automate tasks like stopping services or creating database dumps.
+
+<Tabs>
+  <Tab title="Pre-Backup Script">
+    Runs before backup starts. Use for:
+    - Stopping Docker containers
+    - Creating database dumps
+    - Flushing caches
+
+    ```bash
+    #!/bin/bash
+    # Stop services before backup
+    docker stop myapp
+    mysqldump -u root mydb > /local/backups/mysql-dump.sql
+    ```
+
+    <Warning>
+    If a pre-backup script fails, the backup is cancelled unless "Continue on hook failure" is enabled.
+    </Warning>
+  </Tab>
+
+  <Tab title="Post-Backup Script">
+    Runs after backup completes. Use for:
+    - Restarting services
+    - Sending notifications
+    - Cleanup tasks
+
+    ```bash
+    #!/bin/bash
+    # Restart services after backup
+    docker start myapp
+    rm /local/backups/mysql-dump.sql
+    echo "Backup completed" | mail -s "Backup Status" admin@example.com
+    ```
+  </Tab>
+</Tabs>
+
+### Adding Hooks to Repository
+
+1. Edit your repository settings
+2. Scroll to **Backup Hooks** section
+3. Enter your script in **Pre-Backup Script** or **Post-Backup Script**
+4. Set **Hook Timeout** (default: 300 seconds)
+5. Enable **Continue on hook failure** if desired
+6. Save changes
+
+<Note>
+Hooks run inside the Borg UI container. Use `/local/` paths to access host files and Docker socket mounting to control containers.
+</Note>
+
+## Viewing Archives
+
+After your first backup completes, you can browse the archive:
+
+1. Navigate to the repository details page
+2. Click the **Archives** tab
+3. See your newly created archive with timestamp
+4. Click **Browse** to explore files in the archive
+5. Use the file browser to navigate and verify your backup
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Schedule Backups" icon="clock" href="/guides/scheduling-backups">
+    Automate backups with cron schedules
+  </Card>
+  <Card title="Restore Files" icon="arrow-rotate-left" href="/guides/restore-files">
+    Learn how to restore files from archives
+  </Card>
+  <Card title="Remote Repositories" icon="server" href="/guides/remote-repositories">
+    Set up SSH/SFTP remote backup storage
+  </Card>
+  <Card title="Backup Scripts" icon="code" href="/guides/backup-scripts">
+    Advanced hook scripts and automation
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+### Backup Fails with Permission Denied
+
+If backing up files outside the container:
+
+```bash
+# On host machine, give container access
+sudo chown -R 1000:1000 /path/to/backup
+```
+
+Or mount with proper permissions in Docker:
+
+```yaml
+volumes:
+  - /path/to/backup:/local/backup:rw
+```
+
+### Repository Already Exists
+
+If the path already contains a Borg repository, use **Import Repository** instead of **Create Repository** to add it to Borg UI.
+
+### Slow Initial Backup
+
+First backups are always slower because:
+- All data must be processed and uploaded
+- Compression and encryption add overhead
+- Deduplication builds the initial chunk database
+
+Subsequent backups are much faster due to deduplication.
+
+<Tip>
+Use `lz4` compression for the best balance of speed and compression. Avoid `lzma` unless storage space is critical.
+</Tip>

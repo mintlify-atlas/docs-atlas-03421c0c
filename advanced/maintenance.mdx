@@ -1,0 +1,804 @@
+---
+title: 'Maintenance'
+description: 'Database migrations, log rotation, cleanup tasks, and system maintenance'
+---
+
+# System Maintenance
+
+Keep your Borg UI installation healthy with regular maintenance tasks.
+
+---
+
+## Database Migrations
+
+Borg UI uses an automatic migration system to upgrade the database schema across versions.
+
+### How Migrations Work
+
+**Automatic execution** (from `app/database/migrations/__init__.py:12-55`):
+```python
+def run_migrations():
+    """Run all pending database migrations"""
+    migrations_dir = Path(__file__).parent
+    migration_files = sorted(migrations_dir.glob("[0-9][0-9][0-9]_*.py"))
+    
+    for migration_file in migration_files:
+        migration_module = importlib.import_module(module_name)
+        migration_module.upgrade(connection)
+        connection.commit()
+```
+
+**Migration process:**
+1. **On startup**, Borg UI scans `/app/database/migrations/` for numbered migration files
+2. Files are executed **in order**: `001_*.py`, `002_*.py`, ..., `072_*.py`
+3. Each migration is **idempotent** - safe to run multiple times
+4. Checks for existing columns/tables before adding
+5. Logs success/failure for each migration
+
+### Migration Files
+
+As of latest version, **72 migrations** are included:
+
+**Recent migrations:**
+- `072_add_mqtt_base_topic.py` - MQTT base topic configuration
+- `070_add_source_size_timeout.py` - Source size calculation timeout
+- `069_add_bypass_lock_on_list.py` - Bypass lock for list operations
+- `066_add_ssh_path_prefix.py` - SSH path prefix support
+- `061_add_bypass_lock_on_info.py` - Bypass lock for info operations
+- `053_add_operation_timeouts.py` - Configurable operation timeouts
+- `040_add_cache_settings.py` - Redis cache configuration
+
+**Example migration** (`053_add_operation_timeouts.py:13-68`):
+```python
+def upgrade(db):
+    """Add timeout columns to system_settings"""
+    try:
+        db.execute(text("""
+            ALTER TABLE system_settings
+            ADD COLUMN mount_timeout INTEGER DEFAULT 120
+        """))
+        logger.info("Added mount_timeout column")
+    except Exception as e:
+        if "duplicate column" in str(e).lower():
+            logger.info("mount_timeout column already exists")
+        else:
+            raise
+```
+
+### Monitoring Migrations
+
+**View migration logs on startup:**
+```bash
+docker logs borg-web-ui | grep -i migration
+
+# Example output:
+# INFO: Found 72 migration file(s)
+# INFO: Running migration: 053_add_operation_timeouts
+# INFO: Migration completed: 053_add_operation_timeouts
+# INFO: All migrations completed
+```
+
+**Check for migration failures:**
+```bash
+docker logs borg-web-ui | grep "Migration failed"
+```
+
+### Manual Migration Rollback
+
+<Warning>
+  Rollback is **not supported** by default. Migrations are designed to be forward-only. Manual intervention required for rollback.
+</Warning>
+
+**If you must rollback:**
+
+1. **Restore from database backup:**
+```bash
+# Stop container
+docker stop borg-web-ui
+
+# Restore previous database
+cp /path/to/data/borg-backup-YYYYMMDD.db /path/to/data/borg.db
+
+# Start with older version
+docker compose up -d
+```
+
+2. **Manual SQL rollback** (advanced):
+```bash
+# Access database
+docker exec -it borg-web-ui sqlite3 /data/borg.db
+
+# Example: Remove column added by migration 053
+ALTER TABLE system_settings DROP COLUMN mount_timeout;  # Not supported in SQLite!
+
+# SQLite alternative: Recreate table without column (complex)
+```
+
+<Note>
+  SQLite does not support `DROP COLUMN`. You must recreate the table without the column and migrate data.
+</Note>
+
+---
+
+## Database Backups
+
+### Automatic Backups
+
+**Backup before updates:**
+```bash
+#!/bin/bash
+# backup-and-update.sh
+set -e
+
+# Create backup with timestamp
+BACKUP_FILE="borg-backup-$(date +%Y%m%d-%H%M%S).db"
+docker exec borg-web-ui sqlite3 /data/borg.db ".backup /data/$BACKUP_FILE"
+
+echo "Database backed up to: /data/$BACKUP_FILE"
+
+# Update container
+docker compose pull
+docker compose up -d
+
+echo "Update complete. Database backup: $BACKUP_FILE"
+```
+
+### Manual Backups
+
+**Online backup (recommended):**
+```bash
+# Backup while container is running
+docker exec borg-web-ui sqlite3 /data/borg.db ".backup /data/borg-backup.db"
+
+# Copy to host
+docker cp borg-web-ui:/data/borg-backup.db ./borg-db-$(date +%Y%m%d).db
+```
+
+**Offline backup (safest):**
+```bash
+# Stop container
+docker stop borg-web-ui
+
+# Copy database file
+cp /path/to/data/borg.db /path/to/backups/borg-db-$(date +%Y%m%d).db
+
+# Start container
+docker start borg-web-ui
+```
+
+### Scheduled Backups
+
+**Using cron:**
+```bash
+# Add to crontab
+crontab -e
+
+# Backup daily at 3 AM
+0 3 * * * docker exec borg-web-ui sqlite3 /data/borg.db ".backup /data/borg-backup-$(date +\%Y\%m\%d).db"
+
+# Delete backups older than 30 days
+0 4 * * * find /path/to/data/borg-backup-*.db -mtime +30 -delete
+```
+
+**Using systemd timer:**
+```ini
+# /etc/systemd/system/borg-ui-backup.service
+[Unit]
+Description=Borg UI Database Backup
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker exec borg-web-ui sqlite3 /data/borg.db ".backup /data/borg-backup-$(date +%%Y%%m%%d).db"
+```
+
+```ini
+# /etc/systemd/system/borg-ui-backup.timer
+[Unit]
+Description=Daily Borg UI Database Backup
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+```bash
+# Enable timer
+sudo systemctl enable --now borg-ui-backup.timer
+
+# Check status
+sudo systemctl list-timers borg-ui-backup.timer
+```
+
+### Database Restore
+
+**Restore from backup:**
+```bash
+# Stop container
+docker stop borg-web-ui
+
+# Restore database
+cp /path/to/backups/borg-db-20240228.db /path/to/data/borg.db
+
+# Start container
+docker start borg-web-ui
+
+# Verify
+docker logs -f borg-web-ui
+```
+
+**Restore specific tables only:**
+```bash
+# Access backup database
+sqlite3 /path/to/borg-backup.db
+
+# Export specific table
+.output users_backup.sql
+.dump users
+.quit
+
+# Import into current database
+docker exec -i borg-web-ui sqlite3 /data/borg.db < users_backup.sql
+```
+
+---
+
+## Log Management
+
+Borg UI includes automatic log rotation with configurable retention and size limits.
+
+### Log Storage
+
+**Log locations:**
+- Job logs: `/data/logs/backup_job_*.log`, `/data/logs/restore_job_*.log`, etc.
+- Application log: `/data/logs/borg-ui.log`
+- Docker logs: `docker logs borg-web-ui`
+
+**Log types** (from `app/services/log_manager.py:32-39`):
+```python
+log_patterns = [
+    "backup_job_",
+    "restore_job_",
+    "check_job_",
+    "compact_job_",
+    "prune_job_",
+    "package_job_"
+]
+```
+
+### Automatic Log Rotation
+
+**How it works** (`app/services/log_manager.py:352-432`):
+
+1. **Age-based cleanup**: Delete logs older than configured days
+2. **Size-based cleanup**: Delete oldest logs if total size exceeds limit
+3. **Protected logs**: Running jobs' logs are never deleted
+4. **Combined cleanup**: Both age and size limits enforced
+
+**Configuration:**
+
+Via UI (Settings → System → Log Management):
+- **Log Retention Days**: 7, 14, 30, 60, 90 days (default: 30)
+- **Max Total Log Size**: 100-5000 MB (default: 500 MB)
+
+**Triggered automatically:**
+- Before each backup (in `backup_service.rotate_logs()`)
+- Manually via Settings → System → Cleanup Logs
+
+### Manual Log Cleanup
+
+**View log storage:**
+```bash
+# Via UI: Settings → System → Log Storage
+# Shows: total size, file count, oldest/newest log dates
+
+# Via CLI:
+du -sh /path/to/data/logs
+find /path/to/data/logs -name "*.log" | wc -l
+```
+
+**Clean old logs:**
+```bash
+# Delete logs older than 30 days
+find /path/to/data/logs -name "*.log" -mtime +30 -delete
+
+# Delete logs by size (keep only 100 newest)
+ls -t /path/to/data/logs/*.log | tail -n +101 | xargs rm
+```
+
+**Clean specific job type:**
+```bash
+# Delete old backup job logs
+find /path/to/data/logs -name "backup_job_*.log" -mtime +7 -delete
+
+# Keep only last 50 restore job logs
+ls -t /path/to/data/logs/restore_job_*.log | tail -n +51 | xargs rm
+```
+
+### Log Rotation Configuration
+
+**Via database migration** (`033_add_log_management_settings.py`):
+```sql
+ALTER TABLE system_settings ADD COLUMN log_retention_days INTEGER DEFAULT 30;
+ALTER TABLE system_settings ADD COLUMN log_max_total_size_mb INTEGER DEFAULT 500;
+```
+
+**Protected logs implementation** (`app/services/log_manager.py:116-146`):
+```python
+def get_running_job_log_paths(self, db: Session) -> Set[str]:
+    """Query all job tables for running jobs and return their log file paths"""
+    protected_paths = set()
+    job_models = [BackupJob, RestoreJob, CheckJob, CompactJob, PruneJob, PackageInstallJob]
+    
+    for model in job_models:
+        running_jobs = db.query(model).filter(model.status == 'running').all()
+        for job in running_jobs:
+            if hasattr(job, 'log_file_path') and job.log_file_path:
+                protected_paths.add(str(job.log_file_path))
+    
+    return protected_paths
+```
+
+Running job logs are **never deleted** during cleanup.
+
+---
+
+## Database Maintenance
+
+### Optimize Database
+
+**VACUUM (reclaim space):**
+```bash
+# Rebuild database file, reclaim deleted space
+docker exec borg-web-ui sqlite3 /data/borg.db "VACUUM;"
+
+# Check database size before/after
+du -h /path/to/data/borg.db
+```
+
+**ANALYZE (optimize queries):**
+```bash
+# Update query planner statistics
+docker exec borg-web-ui sqlite3 /data/borg.db "ANALYZE;"
+```
+
+**Combined maintenance:**
+```bash
+#!/bin/bash
+# database-maintenance.sh
+set -e
+
+echo "Starting database maintenance..."
+
+# Analyze for query optimization
+docker exec borg-web-ui sqlite3 /data/borg.db "ANALYZE;"
+echo "✓ ANALYZE complete"
+
+# Vacuum to reclaim space
+docker exec borg-web-ui sqlite3 /data/borg.db "VACUUM;"
+echo "✓ VACUUM complete"
+
+# Check integrity
+RESULT=$(docker exec borg-web-ui sqlite3 /data/borg.db "PRAGMA integrity_check;")
+if [ "$RESULT" = "ok" ]; then
+    echo "✓ Database integrity: OK"
+else
+    echo "✗ Database integrity check failed: $RESULT"
+    exit 1
+fi
+
+echo "Database maintenance complete"
+```
+
+### Check Database Integrity
+
+**Quick check:**
+```bash
+docker exec borg-web-ui sqlite3 /data/borg.db "PRAGMA integrity_check;"
+# Should return: ok
+```
+
+**Full check (slower):**
+```bash
+docker exec borg-web-ui sqlite3 /data/borg.db "PRAGMA integrity_check(100);"
+# Returns up to 100 errors if found
+```
+
+**Check specific table:**
+```bash
+docker exec borg-web-ui sqlite3 /data/borg.db "PRAGMA integrity_check(users);"
+```
+
+### Repair Corrupted Database
+
+<Warning>
+  Database corruption is rare. Always try backup restoration first.
+</Warning>
+
+**Attempt repair:**
+```bash
+# Dump database to SQL
+docker exec borg-web-ui sqlite3 /data/borg.db .dump > borg-dump.sql
+
+# Create new database from dump
+docker exec -i borg-web-ui sqlite3 /data/borg-repaired.db < borg-dump.sql
+
+# Verify new database
+docker exec borg-web-ui sqlite3 /data/borg-repaired.db "PRAGMA integrity_check;"
+
+# If OK, replace original
+docker stop borg-web-ui
+mv /path/to/data/borg.db /path/to/data/borg-corrupted.db
+mv /path/to/data/borg-repaired.db /path/to/data/borg.db
+docker start borg-web-ui
+```
+
+---
+
+## Repository Maintenance
+
+### Compact Repositories
+
+**Purpose:** Reclaim space from deleted archives (after prune operations).
+
+**Via UI:**
+1. Go to **Repository → Maintenance**
+2. Click **Compact Repository**
+3. Wait for completion (can take hours for large repos)
+
+**Via CLI:**
+```bash
+# For local repository
+docker exec borg-web-ui borg compact /path/to/repo
+
+# For SSH repository
+docker exec borg-web-ui borg compact user@host:/path/to/repo
+
+# Compact with progress
+docker exec borg-web-ui borg compact --progress /path/to/repo
+```
+
+**When to compact:**
+- After pruning archives
+- When repository shows "sparse" disk usage
+- To reclaim significant space
+
+**Scheduled compaction:**
+```bash
+# Via UI: Repository → Schedules → Add Compact Schedule
+# Set schedule: weekly, monthly, etc.
+```
+
+### Check Repositories
+
+**Verify repository integrity:**
+
+```bash
+# Via UI: Repository → Maintenance → Check Repository
+
+# Via CLI (quick check)
+docker exec borg-web-ui borg check /path/to/repo
+
+# Deep check (verify data, slower)
+docker exec borg-web-ui borg check --verify-data /path/to/repo
+```
+
+**Scheduled checks:**
+```bash
+# Via UI: Repository → Schedules → Configure Check Schedule
+# Recommended: Weekly or monthly
+```
+
+### Prune Archives
+
+**Configure retention policy:**
+
+Via UI: Repository → Settings → Prune Policy
+- Keep last 7 daily backups
+- Keep last 4 weekly backups
+- Keep last 12 monthly backups
+- Keep last 7 yearly backups
+
+**Manual prune:**
+```bash
+# Via UI: Repository → Maintenance → Prune Repository
+
+# Via CLI:
+docker exec borg-web-ui borg prune \
+  --keep-daily=7 \
+  --keep-weekly=4 \
+  --keep-monthly=12 \
+  /path/to/repo
+```
+
+---
+
+## System Updates
+
+### Update Borg UI
+
+**Recommended update process:**
+
+```bash
+#!/bin/bash
+# update-borg-ui.sh
+set -e
+
+echo "Borg UI Update Script"
+echo "====================="
+
+# 1. Backup database
+echo "Creating database backup..."
+BACKUP_FILE="borg-backup-$(date +%Y%m%d-%H%M%S).db"
+docker exec borg-web-ui sqlite3 /data/borg.db ".backup /data/$BACKUP_FILE"
+echo "✓ Database backed up to: $BACKUP_FILE"
+
+# 2. Pull latest image
+echo "Pulling latest image..."
+docker compose pull
+echo "✓ Image updated"
+
+# 3. Stop and remove old container
+echo "Stopping container..."
+docker compose down
+echo "✓ Container stopped"
+
+# 4. Start new container
+echo "Starting updated container..."
+docker compose up -d
+echo "✓ Container started"
+
+# 5. Watch migration logs
+echo "Watching migration logs (Ctrl+C to exit)..."
+docker logs -f borg-web-ui
+```
+
+**Update to specific version:**
+```yaml
+# docker-compose.yml
+services:
+  borg-ui:
+    image: ainullcode/borg-ui:1.66.1  # Specific version
+    # Or latest:
+    # image: ainullcode/borg-ui:latest
+```
+
+### Rollback After Failed Update
+
+**If update fails:**
+
+```bash
+# 1. Stop failed container
+docker compose down
+
+# 2. Restore database backup
+cp /path/to/data/borg-backup-YYYYMMDD.db /path/to/data/borg.db
+
+# 3. Use previous image version
+# Edit docker-compose.yml:
+# image: ainullcode/borg-ui:1.65.0  # Previous working version
+
+# 4. Start container
+docker compose up -d
+
+# 5. Verify
+docker logs -f borg-web-ui
+```
+
+---
+
+## Maintenance Schedule
+
+### Daily Tasks
+
+<Accordion title="Automated daily maintenance">
+  
+  **These run automatically:**
+  - ✅ Log rotation (before each backup)
+  - ✅ Scheduled backups (if configured)
+  - ✅ Scheduled repository checks (if configured)
+  
+  **No manual intervention required.**
+  
+</Accordion>
+
+### Weekly Tasks
+
+<Accordion title="Recommended weekly tasks">
+  
+  **Perform weekly:**
+  
+  1. **Check logs for errors:**
+  ```bash
+  docker logs borg-web-ui | grep -i error | tail -20
+  ```
+  
+  2. **Verify recent backups:**
+  ```bash
+  # Via UI: Jobs → Recent Jobs → Check for failures
+  ```
+  
+  3. **Review disk space:**
+  ```bash
+  df -h /path/to/data
+  df -h /path/to/repositories
+  ```
+  
+  4. **Check cache statistics:**
+  ```bash
+  # Via UI: Settings → Cache → Review hit rate and size
+  ```
+  
+</Accordion>
+
+### Monthly Tasks
+
+<Accordion title="Monthly maintenance checklist">
+  
+  1. **Database backup:**
+  ```bash
+  docker exec borg-web-ui sqlite3 /data/borg.db ".backup /data/borg-backup-$(date +%Y%m).db"
+  # Store offsite
+  ```
+  
+  2. **Database optimization:**
+  ```bash
+  docker exec borg-web-ui sqlite3 /data/borg.db "VACUUM;"
+  docker exec borg-web-ui sqlite3 /data/borg.db "ANALYZE;"
+  ```
+  
+  3. **Repository checks:**
+  ```bash
+  # Via UI: Repository → Maintenance → Check Repository (for each repo)
+  ```
+  
+  4. **Review and clean old logs:**
+  ```bash
+  # Via UI: Settings → System → Log Management
+  # Or manually:
+  find /path/to/data/logs -name "*.log" -mtime +60 -delete
+  ```
+  
+  5. **Update Borg UI:**
+  ```bash
+  # Check for updates
+  docker compose pull
+  docker compose up -d
+  ```
+  
+</Accordion>
+
+### Quarterly Tasks
+
+<Accordion title="Quarterly deep maintenance">
+  
+  1. **Test disaster recovery:**
+  ```bash
+  # Restore a backup to test location
+  # Verify data integrity
+  # Document any issues
+  ```
+  
+  2. **Audit user accounts:**
+  ```bash
+  # Via UI: Settings → Users → Review and deactivate unused accounts
+  ```
+  
+  3. **Review and update schedules:**
+  ```bash
+  # Via UI: Schedules → Review all backup schedules
+  # Adjust retention policies if needed
+  ```
+  
+  4. **Performance review:**
+  ```bash
+  # Check cache hit rate trends
+  # Review backup duration trends
+  # Optimize slow operations
+  ```
+  
+  5. **Security audit:**
+  ```bash
+  # Rotate SSH keys if needed
+  # Update repository passphrases
+  # Review access logs
+  ```
+  
+</Accordion>
+
+---
+
+## Maintenance Scripts
+
+### All-in-One Maintenance Script
+
+```bash
+#!/bin/bash
+# borg-ui-maintenance.sh - Complete maintenance script
+set -e
+
+LOG_FILE="maintenance-$(date +%Y%m%d-%H%M%S).log"
+exec 1> >(tee -a "$LOG_FILE")
+exec 2>&1
+
+echo "====================================="
+echo "Borg UI Maintenance - $(date)"
+echo "====================================="
+
+# 1. Database Backup
+echo "\n[1/6] Creating database backup..."
+BACKUP_FILE="borg-backup-$(date +%Y%m%d-%H%M%S).db"
+docker exec borg-web-ui sqlite3 /data/borg.db ".backup /data/$BACKUP_FILE"
+echo "✓ Database backed up: $BACKUP_FILE"
+
+# 2. Database Integrity Check
+echo "\n[2/6] Checking database integrity..."
+RESULT=$(docker exec borg-web-ui sqlite3 /data/borg.db "PRAGMA integrity_check;")
+if [ "$RESULT" = "ok" ]; then
+    echo "✓ Database integrity: OK"
+else
+    echo "✗ Database integrity check failed: $RESULT"
+    exit 1
+fi
+
+# 3. Database Optimization
+echo "\n[3/6] Optimizing database..."
+docker exec borg-web-ui sqlite3 /data/borg.db "ANALYZE;"
+echo "✓ ANALYZE complete"
+docker exec borg-web-ui sqlite3 /data/borg.db "VACUUM;"
+echo "✓ VACUUM complete"
+
+# 4. Log Cleanup
+echo "\n[4/6] Cleaning old logs..."
+LOG_COUNT_BEFORE=$(find /path/to/data/logs -name "*.log" | wc -l)
+find /path/to/data/logs -name "*.log" -mtime +30 -delete
+LOG_COUNT_AFTER=$(find /path/to/data/logs -name "*.log" | wc -l)
+DELETED=$((LOG_COUNT_BEFORE - LOG_COUNT_AFTER))
+echo "✓ Deleted $DELETED old log files"
+
+# 5. Disk Space Report
+echo "\n[5/6] Checking disk space..."
+df -h /path/to/data | tail -1
+du -sh /path/to/data/logs
+du -sh /path/to/data/*.db
+
+# 6. Clean Old Backups
+echo "\n[6/6] Cleaning old database backups..."
+BACKUP_COUNT_BEFORE=$(find /path/to/data -name "borg-backup-*.db" | wc -l)
+find /path/to/data -name "borg-backup-*.db" -mtime +90 -delete
+BACKUP_COUNT_AFTER=$(find /path/to/data -name "borg-backup-*.db" | wc -l)
+DELETED=$((BACKUP_COUNT_BEFORE - BACKUP_COUNT_AFTER))
+echo "✓ Deleted $DELETED old database backups (>90 days)"
+
+echo "\n====================================="
+echo "Maintenance Complete - $(date)"
+echo "Log saved to: $LOG_FILE"
+echo "====================================="
+```
+
+**Schedule with cron:**
+```bash
+# Run monthly on 1st at 2 AM
+0 2 1 * * /path/to/borg-ui-maintenance.sh
+```
+
+---
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Troubleshooting" icon="wrench" href="/advanced/troubleshooting">
+    Common maintenance issues and fixes
+  </Card>
+  <Card title="Performance" icon="gauge" href="/advanced/performance">
+    Database and cache optimization
+  </Card>
+  <Card title="Security" icon="shield" href="/advanced/security">
+    Database backup encryption
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Log and backup settings
+  </Card>
+</CardGroup>

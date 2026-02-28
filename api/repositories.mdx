@@ -1,0 +1,298 @@
+---
+title: 'Repositories'
+description: 'Manage Borg backup repositories'
+---
+
+## Overview
+
+Repository endpoints allow you to create, import, list, update, and delete Borg backup repositories.
+
+## List Repositories
+
+Get all repositories with their metadata and status.
+
+**Endpoint:** `GET /api/repositories/`
+
+**Example Request:**
+```bash
+curl http://localhost:5000/api/repositories/ \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "repositories": [
+    {
+      "id": 1,
+      "name": "my-backup",
+      "path": "/local/backups/my-repo",
+      "encryption": "repokey",
+      "compression": "lz4",
+      "source_directories": ["/data", "/home"],
+      "exclude_patterns": ["*.log", "*.tmp"],
+      "repository_type": "local",
+      "host": null,
+      "port": null,
+      "username": null,
+      "ssh_key_id": null,
+      "remote_path": null,
+      "last_backup": "2024-01-15T10:30:00Z",
+      "last_check": "2024-01-14T02:00:00Z",
+      "last_compact": null,
+      "total_size": "15.24 GB",
+      "archive_count": 42,
+      "created_at": "2024-01-01T00:00:00Z",
+      "updated_at": "2024-01-15T10:30:00Z",
+      "pre_backup_script": null,
+      "post_backup_script": null,
+      "hook_timeout": 300,
+      "pre_hook_timeout": 300,
+      "post_hook_timeout": 300,
+      "continue_on_hook_failure": false,
+      "mode": "full",
+      "bypass_lock": false,
+      "custom_flags": null,
+      "has_running_maintenance": false,
+      "has_keyfile": false,
+      "source_ssh_connection_id": null
+    }
+  ]
+}
+```
+
+## Get Repository
+
+Get details for a specific repository.
+
+**Endpoint:** `GET /api/repositories/{repo_id}`
+
+**Example Request:**
+```bash
+curl http://localhost:5000/api/repositories/1 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+## Create Repository
+
+Initialize a new Borg repository.
+
+**Endpoint:** `POST /api/repositories/`
+
+**Admin Only:** Yes
+
+<ParamField body="name" type="string" required>
+  Unique name for the repository
+</ParamField>
+
+<ParamField body="path" type="string" required>
+  Path to repository (local path or will be constructed for SSH)
+</ParamField>
+
+<ParamField body="encryption" type="string" default="repokey">
+  Encryption mode: `repokey`, `keyfile`, `repokey-blake2`, `keyfile-blake2`, or `none`
+</ParamField>
+
+<ParamField body="passphrase" type="string">
+  Passphrase for encrypted repositories (required if encryption is not `none`)
+</ParamField>
+
+<ParamField body="compression" type="string" default="lz4">
+  Compression algorithm: `lz4`, `zstd`, `zlib`, or `none`
+</ParamField>
+
+<ParamField body="source_directories" type="array">
+  List of directories to back up (required for full mode)
+</ParamField>
+
+<ParamField body="exclude_patterns" type="array">
+  List of exclude patterns (e.g., `["*.log", "*.tmp"]`)
+</ParamField>
+
+<ParamField body="connection_id" type="integer">
+  SSH connection ID for remote repositories
+</ParamField>
+
+<ParamField body="remote_path" type="string">
+  Path to borg binary on remote server (e.g., `/usr/local/bin/borg`)
+</ParamField>
+
+<ParamField body="mode" type="string" default="full">
+  Repository mode: `full` (backups + observability) or `observe` (read-only observability)
+</ParamField>
+
+<ParamField body="bypass_lock" type="boolean" default={false}>
+  Use `--bypass-lock` for read-only access (observe mode only)
+</ParamField>
+
+<ParamField body="custom_flags" type="string">
+  Custom command-line flags for `borg create` (e.g., `"--stats --list"`)
+</ParamField>
+
+<ParamField body="source_connection_id" type="integer">
+  SSH connection ID for remote data source (pull-based backups)
+</ParamField>
+
+<ParamField body="pre_backup_script" type="string">
+  Script to run before backup
+</ParamField>
+
+<ParamField body="post_backup_script" type="string">
+  Script to run after backup
+</ParamField>
+
+<ParamField body="pre_hook_timeout" type="integer" default={300}>
+  Pre-backup hook timeout in seconds
+</ParamField>
+
+<ParamField body="post_hook_timeout" type="integer" default={300}>
+  Post-backup hook timeout in seconds
+</ParamField>
+
+<ParamField body="continue_on_hook_failure" type="boolean" default={false}>
+  Continue backup if pre-hook fails
+</ParamField>
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/repositories/ \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "my-backup",
+    "path": "/local/backups/my-repo",
+    "encryption": "repokey",
+    "passphrase": "strong-passphrase",
+    "compression": "lz4",
+    "source_directories": ["/data", "/home"],
+    "exclude_patterns": ["*.log", "*.tmp"],
+    "mode": "full"
+  }'
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Repository created successfully",
+  "repository": {
+    "id": 1,
+    "name": "my-backup",
+    "path": "/local/backups/my-repo",
+    "encryption": "repokey",
+    "compression": "lz4"
+  }
+}
+```
+
+## Import Repository
+
+Import an existing Borg repository.
+
+**Endpoint:** `POST /api/repositories/import`
+
+**Admin Only:** Yes
+
+<ParamField body="name" type="string" required>
+  Unique name for the repository
+</ParamField>
+
+<ParamField body="path" type="string" required>
+  Path to existing repository
+</ParamField>
+
+<ParamField body="passphrase" type="string">
+  Passphrase if repository is encrypted
+</ParamField>
+
+<ParamField body="compression" type="string" default="lz4">
+  Compression for future backups
+</ParamField>
+
+<ParamField body="source_directories" type="array">
+  Directories to back up (required for full mode)
+</ParamField>
+
+<ParamField body="keyfile_content" type="string">
+  Content of borg keyfile for keyfile-based encryption
+</ParamField>
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/repositories/import \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "imported-backup",
+    "path": "ssh://user@host:22/backups/repo",
+    "passphrase": "existing-passphrase",
+    "connection_id": 1,
+    "mode": "observe"
+  }'
+```
+
+## Update Repository
+
+Update repository settings.
+
+**Endpoint:** `PUT /api/repositories/{repo_id}`
+
+**Admin Only:** Yes
+
+**Example Request:**
+```bash
+curl -X PUT http://localhost:5000/api/repositories/1 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "updated-name",
+    "source_directories": ["/data", "/home", "/var"]
+  }'
+```
+
+## Delete Repository
+
+Delete a repository from Borg UI (does not delete actual Borg repository).
+
+**Endpoint:** `DELETE /api/repositories/{repo_id}`
+
+**Admin Only:** Yes
+
+**Example Request:**
+```bash
+curl -X DELETE http://localhost:5000/api/repositories/1 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+## Keyfile Management
+
+### Upload Keyfile
+
+Upload a keyfile for repositories using keyfile encryption.
+
+**Endpoint:** `POST /api/repositories/{repo_id}/keyfile`
+
+**Admin Only:** Yes
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/repositories/1/keyfile \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -F "keyfile=@/path/to/keyfile"
+```
+
+### Download Keyfile
+
+Export and download the keyfile for a repository.
+
+**Endpoint:** `GET /api/repositories/{repo_id}/keyfile`
+
+**Admin Only:** Yes
+
+**Example Request:**
+```bash
+curl http://localhost:5000/api/repositories/1/keyfile \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -o keyfile
+```

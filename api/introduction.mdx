@@ -1,0 +1,113 @@
+---
+title: 'API Introduction'
+description: 'Overview of the Borg UI REST API'
+---
+
+## Overview
+
+Borg UI provides a comprehensive REST API built with FastAPI for managing Borg Backup repositories, archives, schedules, and system configuration.
+
+## Base URL
+
+When running locally:
+```
+http://localhost:5000/api
+```
+
+When deployed:
+```
+https://your-domain.com/api
+```
+
+## OpenAPI Documentation
+
+Interactive API documentation is available at:
+
+- **Swagger UI**: `/api/docs`
+- **ReDoc**: `/api/redoc`
+
+These endpoints provide interactive documentation where you can test API calls directly from your browser.
+
+## API Info Endpoint
+
+Get basic API information:
+
+```bash
+curl http://localhost:5000/api
+```
+
+**Response:**
+```json
+{
+  "name": "Borg Web UI API",
+  "version": "1.56.0",
+  "docs": "/api/docs",
+  "status": "running"
+}
+```
+
+## API Version
+
+Current API version: **1.64.1**
+
+The API is versioned alongside the application. Check the `/api/system/info` endpoint for the current version:
+
+```bash
+curl http://localhost:5000/api/system/info
+```
+
+## Response Format
+
+All API responses use JSON format. Successful responses typically include:
+
+```json
+{
+  "success": true,
+  "data": { ... },
+  "message": "Operation completed successfully"
+}
+```
+
+Error responses include:
+
+```json
+{
+  "detail": "Error message describing what went wrong"
+}
+```
+
+## HTTP Status Codes
+
+- `200 OK` - Request succeeded
+- `201 Created` - Resource created successfully
+- `204 No Content` - Request succeeded with no response body
+- `400 Bad Request` - Invalid request parameters
+- `401 Unauthorized` - Authentication required
+- `403 Forbidden` - Insufficient permissions
+- `404 Not Found` - Resource not found
+- `409 Conflict` - Resource conflict (e.g., duplicate name)
+- `500 Internal Server Error` - Server error
+
+## Health Check
+
+Check if the API is running:
+
+```bash
+curl http://localhost:5000/health
+```
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "service": "borg-web-ui"
+}
+```
+
+## Authentication
+
+Most API endpoints require authentication. See the [Authentication](/api/authentication) section for details on obtaining and using access tokens.
+
+## CORS
+
+CORS is configured to allow requests from specified origins. Configure allowed origins using the `CORS_ORIGINS` environment variable.

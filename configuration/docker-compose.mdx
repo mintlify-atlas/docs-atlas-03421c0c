@@ -1,0 +1,598 @@
+---
+title: Docker Compose Configuration
+description: Complete Docker Compose setup guide and configuration options
+---
+
+# Docker Compose Configuration
+
+Borg UI uses Docker Compose for easy deployment with zero-configuration setup and smart defaults.
+
+## Quick Start
+
+The default `docker-compose.yml` provides:
+- Auto-generated `SECRET_KEY` (persisted to `/data/.secret_key`)
+- Auto-configured SQLite database at `/data/borg.db`
+- Redis cache for 600x faster archive browsing
+- Smart defaults for all settings
+
+## Complete docker-compose.yml
+
+```yaml docker-compose.yml
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+      args:
+        - APP_VERSION=${APP_VERSION:-local-dev}
+    container_name: borg-web-ui
+    restart: unless-stopped
+
+    # Privileged mode for remote-to-remote backups via SSHFS
+    # Disable if you only use local or direct SSH backups
+    privileged: true
+
+    ports:
+      - "${PORT:-8081}:${PORT:-8081}"
+
+    volumes:
+      # Application data (database, logs, SSH keys)
+      - borg_data:/data
+
+      # Borg repository cache (improves backup performance)
+      - borg_cache:/home/borg/.cache/borg
+
+      # System timezone sync
+      - /etc/localtime:/etc/localtime:ro
+
+      # Filesystem access for backups
+      - ${LOCAL_STORAGE_PATH:-/}:/local:rw
+
+      # Docker socket for container management (optional)
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+
+    environment:
+      - PORT=${PORT:-8081}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - PUID=${PUID:-1001}
+      - PGID=${PGID:-1001}
+      - TZ=${TZ:-}
+      - LOCAL_MOUNT_POINTS=${LOCAL_MOUNT_POINTS:-/local}
+
+      # Redis cache settings
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - CACHE_TTL_SECONDS=7200
+      - CACHE_MAX_SIZE_MB=2048
+
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:$${PORT:-8081}/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    networks:
+      - borg_network
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    container_name: borg-redis
+    restart: unless-stopped
+
+    command: >
+      redis-server
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --appendonly no
+
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+    networks:
+      - borg_network
+
+networks:
+  borg_network:
+    driver: bridge
+
+volumes:
+  borg_data:
+    driver: local
+  borg_cache:
+    driver: local
+```
+
+## Service Configuration
+
+### App Service
+
+#### Build Arguments
+
+<ParamField path="APP_VERSION" type="string" default="local-dev">
+  Application version identifier. Auto-populated in CI/CD pipelines.
+  
+  ```yaml
+  build:
+    args:
+      - APP_VERSION=${APP_VERSION:-v1.66.1}
+  ```
+</ParamField>
+
+#### Privileged Mode
+
+<Warning>
+  **Required ONLY for remote-to-remote backups via SSHFS**
+  
+  This allows mounting remote SSH locations as local filesystems. If you only use local or direct SSH backups, you can disable this:
+  
+  ```yaml
+  privileged: false  # Disable if not using SSHFS
+  ```
+</Warning>
+
+#### Ports
+
+```yaml
+ports:
+  - "${PORT:-8081}:${PORT:-8081}"
+```
+
+Maps the web UI port to the host. Default: `8081`
+
+Change via environment variable:
+```bash .env
+PORT=8080
+```
+
+#### Volumes
+
+<CodeGroup>
+
+```yaml Application Data
+# All persistent data: database, SSH keys, logs
+volumes:
+  - borg_data:/data
+```
+
+```yaml Borg Cache
+# Borg repository cache (improves performance)
+volumes:
+  - borg_cache:/home/borg/.cache/borg
+```
+
+```yaml System Timezone
+# Sync timezone with host
+volumes:
+  - /etc/localtime:/etc/localtime:ro
+```
+
+```yaml Filesystem Access
+# Mount host filesystem for backups
+volumes:
+  - ${LOCAL_STORAGE_PATH:-/}:/local:rw
+
+# Production examples (more secure):
+# - /home/yourusername:/local:rw
+# - /var/www:/local/www:ro
+# - /mnt/data:/local/data:rw
+```
+
+```yaml Docker Socket (Optional)
+# For stopping/starting containers during backups
+volumes:
+  - /var/run/docker.sock:/var/run/docker.sock:rw
+```
+
+</CodeGroup>
+
+<Note>
+  **Custom mount paths:** If you use paths other than `/local`, update `LOCAL_MOUNT_POINTS` to match:
+  
+  ```yaml
+  volumes:
+    - /mnt/disk1:/disk1:rw
+    - /home/user:/home:rw
+  environment:
+    - LOCAL_MOUNT_POINTS=/disk1,/home
+  ```
+</Note>
+
+#### Environment Variables
+
+<CodeGroup>
+
+```yaml Core Settings
+environment:
+  - PORT=${PORT:-8081}
+  - ENVIRONMENT=${ENVIRONMENT:-production}
+  - PUID=${PUID:-1001}
+  - PGID=${PGID:-1001}
+  - TZ=${TZ:-}
+```
+
+```yaml Redis Cache
+environment:
+  # Local Redis (uses redis service)
+  - REDIS_HOST=redis
+  - REDIS_PORT=6379
+  - REDIS_DB=0
+  
+  # External Redis URL (optional)
+  # - REDIS_URL=redis://192.168.1.100:6379/0
+  
+  # Cache settings
+  - CACHE_TTL_SECONDS=7200  # 2 hours
+  - CACHE_MAX_SIZE_MB=2048  # 2GB
+```
+
+```yaml Borg Timeouts
+environment:
+  # Increase for very large repositories
+  - BORG_INFO_TIMEOUT=600       # 10 min
+  - BORG_LIST_TIMEOUT=600       # 10 min
+  - BORG_INIT_TIMEOUT=300       # 5 min
+  - BORG_EXTRACT_TIMEOUT=3600   # 1 hour
+  - SCRIPT_TIMEOUT=120          # 2 min
+```
+
+```yaml Advanced Options
+environment:
+  - LOG_LEVEL=DEBUG
+  - INITIAL_ADMIN_PASSWORD=your-secure-password
+  - SECRET_KEY=your-custom-secret-key
+  - DISABLE_AUTHENTICATION=true
+```
+
+</CodeGroup>
+
+See [Environment Variables](/configuration/environment-variables) for complete reference.
+
+#### Health Check
+
+```yaml
+healthcheck:
+  test: ["CMD", "sh", "-c", "curl -f http://localhost:$${PORT:-8081}/"]
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 40s
+```
+
+Ensures the container is healthy and accepting connections.
+
+### Redis Service
+
+<Info>
+  Redis provides 600x faster archive browsing through intelligent caching.
+</Info>
+
+#### Redis Configuration
+
+```yaml
+redis:
+  image: redis:7-alpine
+  container_name: borg-redis
+  restart: unless-stopped
+
+  command: >
+    redis-server
+    --maxmemory 2gb
+    --maxmemory-policy allkeys-lru
+    --save ""
+    --appendonly no
+```
+
+**Redis flags explained:**
+- `--maxmemory 2gb`: Maximum memory usage (adjust as needed)
+- `--maxmemory-policy allkeys-lru`: Evict least recently used keys when full
+- `--save ""`: Disable RDB persistence (cache-only, no disk writes)
+- `--appendonly no`: Disable AOF persistence
+
+<Note>
+  Redis is used purely as a cache - persistence is disabled for better performance. Data loss on restart is acceptable since the cache rebuilds automatically.
+</Note>
+
+#### Redis Ports
+
+```yaml
+ports:
+  - "${REDIS_PORT:-6379}:6379"
+```
+
+Exposes Redis for external connections (optional). Remove this line if you only need internal access.
+
+#### Redis Health Check
+
+```yaml
+healthcheck:
+  test: ["CMD", "redis-cli", "ping"]
+  interval: 10s
+  timeout: 3s
+  retries: 3
+  start_period: 10s
+```
+
+## Production Examples
+
+### Minimal Setup (Local Backups Only)
+
+```yaml docker-compose.yml
+services:
+  app:
+    image: ghcr.io/karanhudia/borg-ui:latest
+    container_name: borg-web-ui
+    restart: unless-stopped
+    privileged: false  # No SSHFS needed
+    
+    ports:
+      - "8081:8081"
+    
+    volumes:
+      - borg_data:/data
+      - borg_cache:/home/borg/.cache/borg
+      - /home:/local:rw  # Only mount /home
+    
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/New_York
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --maxmemory 1gb --maxmemory-policy allkeys-lru
+
+volumes:
+  borg_data:
+  borg_cache:
+```
+
+### Behind Reverse Proxy with External Redis
+
+```yaml docker-compose.yml
+services:
+  app:
+    image: ghcr.io/karanhudia/borg-ui:latest
+    container_name: borg-web-ui
+    restart: unless-stopped
+    
+    # No ports exposed - accessed via reverse proxy
+    expose:
+      - "8081"
+    
+    volumes:
+      - borg_data:/data
+      - borg_cache:/home/borg/.cache/borg
+      - /mnt/storage:/local:rw
+    
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - BASE_PATH=/borg
+      - REDIS_URL=redis://redis.internal.lan:6379/0
+      - DISABLE_AUTHENTICATION=true
+      - PROXY_AUTH_HEADER=X-Forwarded-User
+    
+    networks:
+      - proxy_network
+      - internal
+
+networks:
+  proxy_network:
+    external: true
+  internal:
+    driver: bridge
+
+volumes:
+  borg_data:
+  borg_cache:
+```
+
+### High-Performance Setup (Large Repositories)
+
+```yaml docker-compose.yml
+services:
+  app:
+    image: ghcr.io/karanhudia/borg-ui:latest
+    container_name: borg-web-ui
+    restart: unless-stopped
+    privileged: true
+    
+    ports:
+      - "8081:8081"
+    
+    volumes:
+      - borg_data:/data
+      - borg_cache:/home/borg/.cache/borg
+      - /mnt/storage:/local:rw
+    
+    environment:
+      - PUID=1000
+      - PGID=1000
+      # Increased timeouts for large repos (e.g., 830TB)
+      - BORG_INFO_TIMEOUT=7200    # 2 hours for cache build
+      - BORG_LIST_TIMEOUT=1800    # 30 minutes
+      - BORG_EXTRACT_TIMEOUT=7200 # 2 hours
+      # Larger Redis cache
+      - CACHE_TTL_SECONDS=14400   # 4 hours
+      - CACHE_MAX_SIZE_MB=4096    # 4GB
+    
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory 4gb
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --appendonly no
+
+volumes:
+  borg_data:
+  borg_cache:
+```
+
+## Common Customizations
+
+### Change Port
+
+```yaml
+ports:
+  - "8080:8080"
+environment:
+  - PORT=8080
+```
+
+### Multiple Host Directories
+
+```yaml
+volumes:
+  - /home:/home:rw
+  - /var/www:/www:ro
+  - /mnt/data:/data:rw
+environment:
+  - LOCAL_MOUNT_POINTS=/home,/www,/data
+```
+
+### Disable Redis (In-Memory Cache Only)
+
+```yaml
+services:
+  app:
+    # ... app config ...
+    environment:
+      - REDIS_HOST=disabled
+    # Remove depends_on
+
+# Remove redis service entirely
+```
+
+### Custom Redis Memory Limit
+
+```yaml
+redis:
+  command: >
+    redis-server
+    --maxmemory 512mb
+    --maxmemory-policy allkeys-lru
+```
+
+## Management Commands
+
+<CodeGroup>
+
+```bash Start Services
+docker-compose up -d
+```
+
+```bash View Logs
+# All services
+docker-compose logs -f
+
+# App only
+docker-compose logs -f app
+
+# Redis only
+docker-compose logs -f redis
+```
+
+```bash Restart Services
+docker-compose restart
+
+# Rebuild and restart
+docker-compose up -d --build
+```
+
+```bash Stop Services
+docker-compose down
+
+# Remove volumes (DANGER: deletes all data)
+docker-compose down -v
+```
+
+```bash Update to Latest
+docker-compose pull
+docker-compose up -d
+```
+
+</CodeGroup>
+
+## Troubleshooting
+
+### Port Already in Use
+
+```bash
+# Change port in .env
+echo "PORT=8082" >> .env
+docker-compose up -d
+```
+
+### Permission Denied
+
+```bash
+# Set PUID/PGID to match host user
+id -u && id -g
+echo "PUID=1000" >> .env
+echo "PGID=1000" >> .env
+docker-compose down && docker-compose up -d
+```
+
+### Redis Connection Failed
+
+```bash
+# Check Redis is running
+docker-compose ps redis
+
+# Check Redis logs
+docker-compose logs redis
+
+# Restart Redis
+docker-compose restart redis
+```
+
+### Reset Everything
+
+<Warning>
+  This deletes all data including repositories, SSH keys, and settings.
+</Warning>
+
+```bash
+docker-compose down -v
+docker-compose up -d
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Environment Variables" icon="gears" href="/configuration/environment-variables">
+    Complete reference for all configuration options
+  </Card>
+  <Card title="Cache Configuration" icon="bolt" href="/configuration/cache">
+    Set up Redis for 600x faster archive browsing
+  </Card>
+  <Card title="SSH Keys" icon="key" href="/configuration/ssh-keys">
+    Configure SSH keys for remote repositories
+  </Card>
+  <Card title="Deployment" icon="rocket" href="/deployment">
+    Deploy to production environments
+  </Card>
+</CardGroup>

@@ -1,0 +1,432 @@
+---
+title: Environment Variables
+description: Complete reference for all Borg UI environment variables
+---
+
+# Environment Variables
+
+Borg UI supports configuration through environment variables. Most settings have sensible defaults and can be configured through the web interface.
+
+## Application Settings
+
+<ParamField path="PORT" type="integer" default="8081">
+  Port for the web UI to listen on.
+  
+  ```bash
+  PORT=8081
+  ```
+</ParamField>
+
+<ParamField path="ENVIRONMENT" type="string" default="production">
+  Environment mode. Valid values: `production`, `development`.
+  
+  In development mode:
+  - Debug mode is automatically enabled
+  - Log level defaults to DEBUG
+  
+  ```bash
+  ENVIRONMENT=production
+  ```
+</ParamField>
+
+<ParamField path="TZ" type="string" default="host timezone">
+  Timezone configuration for correct timestamps in archive names and logs.
+  
+  Common timezones:
+  - `America/New_York`
+  - `America/Chicago`
+  - `America/Los_Angeles`
+  - `Europe/London`
+  - `Europe/Paris`
+  - `Asia/Kolkata`
+  - `Asia/Tokyo`
+  
+  See the [full timezone list](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones).
+  
+  ```bash
+  TZ=America/Chicago
+  ```
+</ParamField>
+
+<ParamField path="APP_VERSION" type="string" default="auto-generated">
+  Application version identifier. Auto-generated in CI/CD. Set manually for local development.
+  
+  ```bash
+  APP_VERSION=local-dev
+  ```
+</ParamField>
+
+## Reverse Proxy Configuration
+
+<ParamField path="BASE_PATH" type="string" default="/">
+  Base path for running behind a reverse proxy in a subfolder.
+  
+  **Requirements:**
+  - Must start with `/` (e.g., `/borg` not `borg`)
+  - No trailing slash (e.g., `/borg` not `/borg/`)
+  - Requires rebuild: `docker-compose up -d --build`
+  
+  **Example Nginx configuration:**
+  ```nginx
+  location /borg/ {
+      proxy_pass http://localhost:8081/;
+  }
+  ```
+  
+  ```bash
+  BASE_PATH=/borg
+  ```
+</ParamField>
+
+## User/Group ID Configuration
+
+<ParamField path="PUID" type="integer" default="1001">
+  User ID for the container process. Set this to match your host user's UID for proper file permissions.
+  
+  Find your UID: `id -u`
+  
+  **Common values:**
+  - Linux: `1000`
+  - macOS: `501` (varies, run `id -u`)
+  - Default: `1001`
+  
+  ```bash
+  PUID=1000
+  ```
+</ParamField>
+
+<ParamField path="PGID" type="integer" default="1001">
+  Group ID for the container process. Set this to match your host user's GID for proper file permissions.
+  
+  Find your GID: `id -g`
+  
+  **Common values:**
+  - Linux: `1000`
+  - macOS: `20` (varies, run `id -g`)
+  - Default: `1001`
+  
+  ```bash
+  PGID=1000
+  ```
+</ParamField>
+
+## Security Settings
+
+<ParamField path="SECRET_KEY" type="string" default="auto-generated">
+  Secret key for session management and encryption. Auto-generated on first run and persisted to `/data/.secret_key`.
+  
+  <Warning>
+    Do not change this after initial setup unless you want to invalidate all sessions and re-encrypt SSH keys.
+  </Warning>
+  
+  ```bash
+  SECRET_KEY=your-custom-secret-key-here
+  ```
+</ParamField>
+
+<ParamField path="LOG_LEVEL" type="string" default="INFO">
+  Application logging level. Valid values: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`.
+  
+  ```bash
+  LOG_LEVEL=INFO
+  ```
+</ParamField>
+
+<ParamField path="DISABLE_AUTHENTICATION" type="boolean" default="false">
+  Disable built-in authentication and trust reverse proxy headers.
+  
+  <Warning>
+    Only use this when Borg UI is behind a reverse proxy that handles authentication (e.g., Authelia, Authentik).
+  </Warning>
+  
+  ```bash
+  DISABLE_AUTHENTICATION=true
+  ```
+</ParamField>
+
+<ParamField path="PROXY_AUTH_HEADER" type="string" default="X-Forwarded-User">
+  HTTP header containing the authenticated username from the reverse proxy.
+  
+  Only used when `DISABLE_AUTHENTICATION=true`.
+  
+  ```bash
+  PROXY_AUTH_HEADER=X-Forwarded-User
+  ```
+</ParamField>
+
+<ParamField path="INITIAL_ADMIN_PASSWORD" type="string" default="none">
+  Set the initial admin password on first run. If not provided, a random password is generated and displayed in logs.
+  
+  ```bash
+  INITIAL_ADMIN_PASSWORD=your-secure-password
+  ```
+</ParamField>
+
+## Host Filesystem Mount
+
+<ParamField path="LOCAL_STORAGE_PATH" type="string" default="/">
+  Host filesystem path to mount inside the container at `/local`.
+  
+  **Default:** Entire host filesystem (`/`) is mounted to `/local` in the container.
+  
+  **Examples:**
+  ```bash
+  # macOS - Only mount user directories
+  LOCAL_STORAGE_PATH=/Users
+  
+  # Linux - Only mount home directories
+  LOCAL_STORAGE_PATH=/home
+  
+  # Custom - Only mount specific backup directory
+  LOCAL_STORAGE_PATH=/mnt/backups
+  ```
+  
+  **Creating repositories:**
+  - macOS: `/local/Users/username/backups/my-repo`
+  - Linux: `/local/home/username/backups/my-repo`
+  - Custom: `/local/path/to/your/backup/location`
+</ParamField>
+
+<ParamField path="LOCAL_MOUNT_POINTS" type="string" default="/local">
+  Comma-separated list of container paths where host directories are mounted.
+  
+  Used for file browser detection and highlighting.
+  
+  ```bash
+  # Default
+  LOCAL_MOUNT_POINTS=/local
+  
+  # Multiple mount points
+  LOCAL_MOUNT_POINTS=/local,/mylocalserver,/data
+  ```
+</ParamField>
+
+## Borg Operation Timeouts
+
+<Info>
+  Increase these timeouts for very large repositories (e.g., 830TB repositories with 166-minute cache build times).
+</Info>
+
+<ParamField path="BORG_INFO_TIMEOUT" type="integer" default="600">
+  Timeout in seconds for `borg info` operations (repository verification, stats).
+  
+  **Default:** 10 minutes (600 seconds)
+  
+  ```bash
+  # Very large repository
+  BORG_INFO_TIMEOUT=7200  # 2 hours
+  ```
+</ParamField>
+
+<ParamField path="BORG_LIST_TIMEOUT" type="integer" default="600">
+  Timeout in seconds for `borg list` operations (listing archives and files).
+  
+  **Default:** 10 minutes (600 seconds)
+  
+  ```bash
+  BORG_LIST_TIMEOUT=600
+  ```
+</ParamField>
+
+<ParamField path="BORG_INIT_TIMEOUT" type="integer" default="300">
+  Timeout in seconds for `borg init` operations (new repository creation).
+  
+  **Default:** 5 minutes (300 seconds)
+  
+  ```bash
+  BORG_INIT_TIMEOUT=300
+  ```
+</ParamField>
+
+<ParamField path="BORG_EXTRACT_TIMEOUT" type="integer" default="3600">
+  Timeout in seconds for `borg extract` operations (file restoration).
+  
+  **Default:** 1 hour (3600 seconds)
+  
+  ```bash
+  BORG_EXTRACT_TIMEOUT=3600
+  ```
+</ParamField>
+
+<ParamField path="BORG_MOUNT_TIMEOUT" type="integer" default="120">
+  Timeout in seconds for `borg mount` operations (archive browsing via FUSE).
+  
+  **Default:** 2 minutes (120 seconds)
+  
+  ```bash
+  BORG_MOUNT_TIMEOUT=120
+  ```
+</ParamField>
+
+<ParamField path="SCRIPT_TIMEOUT" type="integer" default="120">
+  Timeout in seconds for pre/post backup scripts.
+  
+  **Default:** 2 minutes (120 seconds)
+  
+  ```bash
+  SCRIPT_TIMEOUT=120
+  ```
+</ParamField>
+
+<ParamField path="SOURCE_SIZE_TIMEOUT" type="integer" default="3600">
+  Timeout in seconds for `du`-based source size calculation (large datasets).
+  
+  **Default:** 1 hour (3600 seconds)
+  
+  ```bash
+  SOURCE_SIZE_TIMEOUT=3600
+  ```
+</ParamField>
+
+## Redis Cache Configuration
+
+<Note>
+  Redis cache provides 600x faster archive browsing. Configure via **Settings → Cache** tab in the UI (recommended) or use environment variables for initial defaults.
+</Note>
+
+See the [Cache Configuration](/configuration/cache) page for detailed setup instructions.
+
+<ParamField path="REDIS_URL" type="string" default="none">
+  External Redis connection URL. Takes precedence over `REDIS_HOST`/`REDIS_PORT`.
+  
+  **Formats:**
+  - TCP: `redis://hostname:port/db`
+  - TCP with password: `redis://:password@hostname:port/db`
+  - TLS: `rediss://hostname:port/db`
+  - Unix socket: `unix:///run/redis.sock?db=0`
+  
+  **Examples:**
+  ```bash
+  # Remote Redis
+  REDIS_URL=redis://192.168.1.100:6379/0
+  
+  # With password
+  REDIS_URL=redis://:mypassword@redis.example.com:6379/0
+  
+  # TLS connection
+  REDIS_URL=rediss://secure-redis.example.com:6380/0
+  ```
+</ParamField>
+
+<ParamField path="REDIS_HOST" type="string" default="redis">
+  Redis server hostname. Used if `REDIS_URL` is not set.
+  
+  ```bash
+  REDIS_HOST=redis
+  ```
+</ParamField>
+
+<ParamField path="REDIS_PORT" type="integer" default="6379">
+  Redis server port. Used if `REDIS_URL` is not set.
+  
+  ```bash
+  REDIS_PORT=6379
+  ```
+</ParamField>
+
+<ParamField path="REDIS_DB" type="integer" default="0">
+  Redis database number (0-15). Used if `REDIS_URL` is not set.
+  
+  ```bash
+  REDIS_DB=0
+  ```
+</ParamField>
+
+<ParamField path="REDIS_PASSWORD" type="string" default="none">
+  Redis server password. Used if `REDIS_URL` is not set.
+  
+  ```bash
+  REDIS_PASSWORD=your-redis-password
+  ```
+</ParamField>
+
+<ParamField path="CACHE_TTL_SECONDS" type="integer" default="7200">
+  Cache time-to-live in seconds. Archive data is cached for this duration.
+  
+  **Default:** 2 hours (7200 seconds)
+  
+  ```bash
+  CACHE_TTL_SECONDS=7200
+  ```
+</ParamField>
+
+<ParamField path="CACHE_MAX_SIZE_MB" type="integer" default="2048">
+  Maximum cache size in megabytes (used by in-memory fallback cache).
+  
+  **Default:** 2GB (2048 MB)
+  
+  ```bash
+  CACHE_MAX_SIZE_MB=2048
+  ```
+</ParamField>
+
+## Data Directory
+
+<ParamField path="DATA_DIR" type="string" default="/data">
+  Main data directory for all persistent data (database, SSH keys, logs, configs).
+  
+  <Warning>
+    Do not change this unless you have a specific reason. The Docker volume mount should map to `/data` in the container.
+  </Warning>
+  
+  ```bash
+  DATA_DIR=/data
+  ```
+</ParamField>
+
+<ParamField path="DATABASE_URL" type="string" default="sqlite:////data/borg.db">
+  Database connection URL. Auto-derived from `DATA_DIR`.
+  
+  ```bash
+  DATABASE_URL=sqlite:////data/borg.db
+  ```
+</ParamField>
+
+## Complete Example
+
+```bash .env
+# Application Settings
+PORT=8081
+ENVIRONMENT=production
+TZ=America/Chicago
+
+# User/Group ID (match your host user)
+PUID=1000
+PGID=1000
+
+# Host Filesystem Mount
+LOCAL_STORAGE_PATH=/home
+
+# Redis Cache (optional - for 600x faster browsing)
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_DB=0
+CACHE_TTL_SECONDS=7200
+CACHE_MAX_SIZE_MB=2048
+
+# Borg Timeouts (increase for large repositories)
+BORG_INFO_TIMEOUT=600
+BORG_LIST_TIMEOUT=600
+
+# Logging
+LOG_LEVEL=INFO
+```
+
+## Repository Types
+
+<Info>
+  **Local (Mounted):** Store repositories on host filesystem via `/local` mount (recommended)
+  
+  **Local (Container):** Store within container (limited to container storage)
+  
+  **SSH:** Access remote repositories via SSH (for remote servers)
+</Info>
+
+## Recommended Setup
+
+1. Set `LOCAL_STORAGE_PATH` to your desired host directory (e.g., `/Users` or `/home`)
+2. Set `PUID` and `PGID` to match your host user: `id -u && id -g`
+3. Configure timezone with `TZ`
+4. Restart container: `docker-compose down && docker-compose up -d`
+5. Create "local" repositories at `/local/...` in the UI
+6. Your backups are stored on the host and survive container rebuilds

@@ -1,0 +1,433 @@
+---
+title: 'Schedules'
+description: 'Manage scheduled backup jobs with cron expressions'
+---
+
+## Overview
+
+Schedule endpoints allow you to create and manage automated backup schedules using cron expressions. Schedules can target single or multiple repositories.
+
+## List Scheduled Jobs
+
+Get all scheduled backup jobs.
+
+**Endpoint:** `GET /api/schedule/`
+
+**Example Request:**
+```bash
+curl http://localhost:5000/api/schedule/ \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "jobs": [
+    {
+      "id": 1,
+      "name": "Daily Backup",
+      "cron_expression": "0 2 * * *",
+      "repository": null,
+      "repository_id": null,
+      "repository_ids": [1, 2],
+      "enabled": true,
+      "last_run": "2024-01-15T02:00:00Z",
+      "next_run": "2024-01-16T02:00:00Z",
+      "created_at": "2024-01-01T00:00:00Z",
+      "updated_at": "2024-01-15T02:00:00Z",
+      "description": "Daily backup of all repositories",
+      "archive_name_template": "{job_name}-{now}",
+      "run_repository_scripts": false,
+      "pre_backup_script_id": null,
+      "post_backup_script_id": null,
+      "pre_backup_script_parameters": null,
+      "post_backup_script_parameters": null,
+      "run_prune_after": true,
+      "run_compact_after": false,
+      "prune_keep_hourly": 0,
+      "prune_keep_daily": 7,
+      "prune_keep_weekly": 4,
+      "prune_keep_monthly": 6,
+      "prune_keep_quarterly": 0,
+      "prune_keep_yearly": 1,
+      "last_prune": "2024-01-15T02:15:00Z",
+      "last_compact": null
+    }
+  ]
+}
+```
+
+## Get Scheduled Job
+
+Get details for a specific scheduled job.
+
+**Endpoint:** `GET /api/schedule/{job_id}`
+
+**Example Request:**
+```bash
+curl http://localhost:5000/api/schedule/1 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "job": {
+    "id": 1,
+    "name": "Daily Backup",
+    "cron_expression": "0 2 * * *",
+    "repository": null,
+    "enabled": true,
+    "last_run": "2024-01-15T02:00:00Z",
+    "next_run": "2024-01-16T02:00:00Z",
+    "next_runs": [
+      "2024-01-16T02:00:00Z",
+      "2024-01-17T02:00:00Z",
+      "2024-01-18T02:00:00Z",
+      "2024-01-19T02:00:00Z",
+      "2024-01-20T02:00:00Z"
+    ],
+    "created_at": "2024-01-01T00:00:00Z",
+    "updated_at": "2024-01-15T02:00:00Z",
+    "description": "Daily backup of all repositories",
+    "archive_name_template": "{job_name}-{now}",
+    "run_prune_after": true,
+    "run_compact_after": false,
+    "prune_keep_daily": 7,
+    "prune_keep_weekly": 4,
+    "prune_keep_monthly": 6,
+    "prune_keep_yearly": 1,
+    "last_prune": "2024-01-15T02:15:00Z",
+    "last_compact": null
+  }
+}
+```
+
+## Create Scheduled Job
+
+Create a new scheduled backup job.
+
+**Endpoint:** `POST /api/schedule/`
+
+**Admin Only:** Yes
+
+<ParamField body="name" type="string" required>
+  Unique name for the scheduled job
+</ParamField>
+
+<ParamField body="cron_expression" type="string" required>
+  Cron expression for schedule (e.g., `"0 2 * * *"` for daily at 2 AM)
+</ParamField>
+
+<ParamField body="repository_ids" type="array">
+  List of repository IDs to back up (for multi-repo schedules)
+</ParamField>
+
+<ParamField body="repository_id" type="integer">
+  Single repository ID (alternative to repository_ids)
+</ParamField>
+
+<ParamField body="enabled" type="boolean" default={true}>
+  Whether the schedule is enabled
+</ParamField>
+
+<ParamField body="description" type="string">
+  Optional description
+</ParamField>
+
+<ParamField body="archive_name_template" type="string">
+  Template for archive names. Placeholders: `{job_name}`, `{repo_name}`, `{now}`, `{date}`, `{time}`, `{timestamp}`
+</ParamField>
+
+<ParamField body="run_repository_scripts" type="boolean" default={false}>
+  Run per-repository pre/post scripts
+</ParamField>
+
+<ParamField body="pre_backup_script_id" type="integer">
+  Schedule-level pre-backup script ID
+</ParamField>
+
+<ParamField body="post_backup_script_id" type="integer">
+  Schedule-level post-backup script ID
+</ParamField>
+
+<ParamField body="run_prune_after" type="boolean" default={false}>
+  Run prune after backup
+</ParamField>
+
+<ParamField body="run_compact_after" type="boolean" default={false}>
+  Run compact after prune
+</ParamField>
+
+<ParamField body="prune_keep_hourly" type="integer" default={0}>
+  Number of hourly backups to keep
+</ParamField>
+
+<ParamField body="prune_keep_daily" type="integer" default={7}>
+  Number of daily backups to keep
+</ParamField>
+
+<ParamField body="prune_keep_weekly" type="integer" default={4}>
+  Number of weekly backups to keep
+</ParamField>
+
+<ParamField body="prune_keep_monthly" type="integer" default={6}>
+  Number of monthly backups to keep
+</ParamField>
+
+<ParamField body="prune_keep_yearly" type="integer" default={1}>
+  Number of yearly backups to keep
+</ParamField>
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/schedule/ \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Daily Backup",
+    "cron_expression": "0 2 * * *",
+    "repository_ids": [1, 2],
+    "enabled": true,
+    "description": "Daily backup at 2 AM",
+    "archive_name_template": "{job_name}-{now}",
+    "run_prune_after": true,
+    "prune_keep_daily": 7,
+    "prune_keep_weekly": 4,
+    "prune_keep_monthly": 6
+  }'
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Scheduled job created successfully",
+  "job": {
+    "id": 1,
+    "name": "Daily Backup",
+    "cron_expression": "0 2 * * *",
+    "repository": null,
+    "enabled": true,
+    "next_run": "2024-01-16T02:00:00Z"
+  }
+}
+```
+
+## Update Scheduled Job
+
+Update an existing scheduled job.
+
+**Endpoint:** `PUT /api/schedule/{job_id}`
+
+**Admin Only:** Yes
+
+**Example Request:**
+```bash
+curl -X PUT http://localhost:5000/api/schedule/1 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "enabled": false,
+    "description": "Temporarily disabled"
+  }'
+```
+
+## Delete Scheduled Job
+
+Delete a scheduled job.
+
+**Endpoint:** `DELETE /api/schedule/{job_id}`
+
+**Admin Only:** Yes
+
+**Example Request:**
+```bash
+curl -X DELETE http://localhost:5000/api/schedule/1 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+## Toggle Schedule
+
+Enable or disable a scheduled job.
+
+**Endpoint:** `POST /api/schedule/{job_id}/toggle`
+
+**Admin Only:** Yes
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/schedule/1/toggle \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Scheduled job disabled successfully",
+  "enabled": false
+}
+```
+
+## Run Schedule Now
+
+Trigger a scheduled job immediately.
+
+**Endpoint:** `POST /api/schedule/{job_id}/run-now`
+
+**Admin Only:** Yes
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/schedule/1/run-now \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "job_id": 123,
+  "status": "pending",
+  "message": "Scheduled job started successfully"
+}
+```
+
+## Duplicate Schedule
+
+Create a copy of an existing schedule.
+
+**Endpoint:** `POST /api/schedule/{job_id}/duplicate`
+
+**Admin Only:** Yes
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/schedule/1/duplicate \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Scheduled job duplicated successfully",
+  "job": {
+    "id": 2,
+    "name": "Copy of Daily Backup",
+    "enabled": false,
+    "cron_expression": "0 2 * * *"
+  }
+}
+```
+
+## Get Cron Presets
+
+Get common cron expression presets.
+
+**Endpoint:** `GET /api/schedule/cron-presets`
+
+**Example Request:**
+```bash
+curl http://localhost:5000/api/schedule/cron-presets \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "presets": [
+    {
+      "name": "Every Hour",
+      "expression": "0 * * * *",
+      "description": "Run every hour"
+    },
+    {
+      "name": "Daily at 2 AM",
+      "expression": "0 2 * * *",
+      "description": "Run daily at 2 AM"
+    },
+    {
+      "name": "Weekly on Sunday",
+      "expression": "0 0 * * 0",
+      "description": "Run weekly on Sunday at midnight"
+    }
+  ]
+}
+```
+
+## Validate Cron Expression
+
+Validate a cron expression and preview upcoming runs.
+
+**Endpoint:** `POST /api/schedule/validate-cron`
+
+<ParamField body="minute" type="string" default="*">Minute field</ParamField>
+<ParamField body="hour" type="string" default="*">Hour field</ParamField>
+<ParamField body="day_of_month" type="string" default="*">Day of month field</ParamField>
+<ParamField body="month" type="string" default="*">Month field</ParamField>
+<ParamField body="day_of_week" type="string" default="*">Day of week field</ParamField>
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/schedule/validate-cron \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "minute": "0",
+    "hour": "2",
+    "day_of_month": "*",
+    "month": "*",
+    "day_of_week": "*"
+  }'
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "cron_expression": "0 2 * * *",
+  "next_runs": [
+    "2024-01-16T02:00:00Z",
+    "2024-01-17T02:00:00Z",
+    "2024-01-18T02:00:00Z"
+  ],
+  "description": "At 02:00 AM"
+}
+```
+
+## Get Upcoming Jobs
+
+Get list of upcoming scheduled executions.
+
+**Endpoint:** `GET /api/schedule/upcoming-jobs`
+
+<ParamField query="hours" type="integer" default={24}>
+  Number of hours to look ahead
+</ParamField>
+
+**Example Request:**
+```bash
+curl "http://localhost:5000/api/schedule/upcoming-jobs?hours=48" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "upcoming_jobs": [
+    {
+      "id": 1,
+      "name": "Daily Backup",
+      "repository": null,
+      "next_run": "2024-01-16T02:00:00Z",
+      "cron_expression": "0 2 * * *"
+    }
+  ],
+  "hours_ahead": 48
+}
+```

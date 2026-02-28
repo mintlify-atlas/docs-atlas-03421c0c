@@ -1,0 +1,554 @@
+---
+title: "Notifications"
+description: "Get instant alerts for backup events via 100+ notification services powered by Apprise"
+---
+
+## Overview
+
+Borg UI integrates with [Apprise](https://github.com/caronc/apprise) to send notifications to 100+ services including Email, Slack, Discord, Telegram, Pushover, Microsoft Teams, and many more.
+
+## Supported Services
+
+Apprise supports a wide range of notification services:
+
+<Tabs>
+  <Tab title="Messaging">
+    - **Slack** - Team collaboration
+    - **Discord** - Gaming and community chat
+    - **Telegram** - Secure messaging
+    - **Microsoft Teams** - Enterprise collaboration
+    - **Mattermost** - Self-hosted chat
+    - **Rocket.Chat** - Open source chat
+  </Tab>
+
+  <Tab title="Email">
+    - **SMTP** - Any email provider
+    - **Gmail** - Google email
+    - **Mailgun** - Transactional email
+    - **SendGrid** - Email delivery
+    - **Amazon SES** - AWS email
+    - **Office 365** - Microsoft email
+  </Tab>
+
+  <Tab title="Push Notifications">
+    - **Pushover** - iOS/Android push
+    - **Pushbullet** - Cross-platform push
+    - **Prowl** - iOS push
+    - **Pushsafer** - Multi-platform push
+    - **Join** - Android integration
+    - **Apprise API** - Self-hosted notifications
+  </Tab>
+
+  <Tab title="Webhooks">
+    - **JSON Webhooks** - Custom integrations
+    - **Generic Webhooks** - Simple HTTP POST
+    - **Splunk** - Log aggregation
+    - **Datadog** - Monitoring platform
+    - **PagerDuty** - Incident management
+  </Tab>
+</Tabs>
+
+<Note>
+  See the [Apprise Wiki](https://github.com/caronc/apprise/wiki) for a complete list of supported services and URL formats.
+</Note>
+
+## Creating Notification Settings
+
+<Steps>
+  <Step title="Navigate to Notifications">
+    Go to Settings > Notifications in the Borg UI interface.
+  </Step>
+
+  <Step title="Add Notification Service">
+    Create a new notification configuration:
+
+    ```bash
+    POST /api/notifications
+    ```
+
+    ```json
+    {
+      "name": "Production Slack",
+      "service_url": "slack://TokenA/TokenB/TokenC",
+      "enabled": true,
+      "title_prefix": "[PROD]",
+      "include_job_name_in_title": true,
+      "notify_on_backup_start": false,
+      "notify_on_backup_success": true,
+      "notify_on_backup_failure": true,
+      "notify_on_restore_success": false,
+      "notify_on_restore_failure": true,
+      "notify_on_check_success": false,
+      "notify_on_check_failure": true,
+      "monitor_all_repositories": true,
+      "repository_ids": null
+    }
+    ```
+
+    ```python
+    # From notifications.py:22-38
+    class NotificationSettingsCreate(BaseModel):
+        name: str = Field(..., min_length=1, max_length=255)
+        service_url: str = Field(..., description="Apprise service URL")
+        enabled: bool = Field(default=True)
+        title_prefix: Optional[str] = Field(default=None, max_length=100)
+        include_job_name_in_title: bool = Field(default=False)
+        notify_on_backup_start: bool = Field(default=False)
+        notify_on_backup_success: bool = Field(default=False)
+        notify_on_backup_failure: bool = Field(default=True)
+        notify_on_restore_success: bool = Field(default=False)
+        notify_on_restore_failure: bool = Field(default=True)
+        notify_on_check_success: bool = Field(default=False)
+        notify_on_check_failure: bool = Field(default=True)
+        monitor_all_repositories: bool = Field(default=True)
+        repository_ids: Optional[List[int]] = Field(default=None)
+    ```
+  </Step>
+
+  <Step title="Test Notification">
+    Verify the service URL before saving:
+
+    ```bash
+    POST /api/notifications/test
+    ```
+
+    ```json
+    {
+      "service_url": "slack://TokenA/TokenB/TokenC"
+    }
+    ```
+
+    ```python
+    # From notifications.py:218-225
+    @router.post("/test")
+    async def test_notification(
+        request: TestNotificationRequest,
+        current_user: User = Depends(get_current_user)
+    ):
+        result = await notification_service.test_notification(request.service_url)
+        return result
+    ```
+  </Step>
+</Steps>
+
+## Service URL Formats
+
+Each notification service has a specific URL format:
+
+<Accordion title="Slack">
+  **Slack Webhook Integration**
+
+  ```
+  slack://TokenA/TokenB/TokenC
+  slack://TokenA/TokenB/TokenC/#channel
+  slacks://TokenA/TokenB/TokenC  # SSL
+  ```
+
+  **Setup:**
+  1. Go to Slack App Settings
+  2. Create Incoming Webhook
+  3. Copy the webhook tokens
+  4. Format: `https://hooks.slack.com/services/TokenA/TokenB/TokenC`
+  5. Use tokens in URL: `slack://TokenA/TokenB/TokenC`
+</Accordion>
+
+<Accordion title="Discord">
+  **Discord Webhook**
+
+  ```
+  discord://WebhookID/WebhookToken
+  ```
+
+  **Setup:**
+  1. Go to Server Settings > Integrations > Webhooks
+  2. Create webhook
+  3. Copy webhook URL: `https://discord.com/api/webhooks/ID/Token`
+  4. Format as: `discord://ID/Token`
+</Accordion>
+
+<Accordion title="Telegram">
+  **Telegram Bot**
+
+  ```
+  tgram://BotToken/ChatID
+  ```
+
+  **Setup:**
+  1. Create bot with @BotFather
+  2. Get bot token
+  3. Get chat ID (send message to bot, check updates)
+  4. Format: `tgram://BotToken/ChatID`
+</Accordion>
+
+<Accordion title="Email (SMTP)">
+  **Generic SMTP**
+
+  ```
+  mailto://user:password@smtp.example.com?to=recipient@example.com
+  mailtos://user:password@smtp.example.com:465?to=recipient@example.com
+  ```
+
+  **Gmail Example:**
+  ```
+  mailto://user:apppassword@smtp.gmail.com?to=alerts@example.com
+  ```
+
+  <Warning>
+    Gmail requires an App Password, not your regular password. Enable 2FA and generate an App Password in Google Account settings.
+  </Warning>
+</Accordion>
+
+<Accordion title="Pushover">
+  **Pushover Notifications**
+
+  ```
+  pover://UserKey@AppToken
+  pover://UserKey@AppToken/Device
+  ```
+
+  **Setup:**
+  1. Sign up at pushover.net
+  2. Get user key from dashboard
+  3. Create application to get app token
+  4. Format: `pover://UserKey@AppToken`
+</Accordion>
+
+<Accordion title="Microsoft Teams">
+  **Teams Webhook**
+
+  ```
+  msteams://TokenA/TokenB/TokenC
+  ```
+
+  **Setup:**
+  1. Go to Teams channel
+  2. Add Incoming Webhook connector
+  3. Copy webhook URL
+  4. Extract tokens from URL
+</Accordion>
+
+<Accordion title="JSON Webhook">
+  **Custom JSON Webhooks**
+
+  ```
+  json://webhook.example.com/path
+  jsons://webhook.example.com/path  # SSL
+  ```
+
+  **Use Case:**
+  ```python
+  # From notifications.py:25
+  service_url: str = Field(..., description="Use json:// or jsons:// for JSON webhooks")
+  ```
+
+  Borg UI sends:
+  ```json
+  {
+    "title": "[PROD] Backup Failed",
+    "body": "Backup for repository 'production' failed: Connection timeout",
+    "type": "failure"
+  }
+  ```
+</Accordion>
+
+## Event Types
+
+Configure which events trigger notifications:
+
+```python
+# From notifications.py:28-36
+notify_on_backup_start: bool = Field(default=False)
+notify_on_backup_success: bool = Field(default=False)
+notify_on_backup_failure: bool = Field(default=True)
+notify_on_restore_success: bool = Field(default=False)
+notify_on_restore_failure: bool = Field(default=True)
+notify_on_check_success: bool = Field(default=False)
+notify_on_check_failure: bool = Field(default=True)
+notify_on_schedule_failure: bool = Field(default=True)
+```
+
+<Tabs>
+  <Tab title="Backup Events">
+    - **backup_start**: Backup operation begins
+    - **backup_success**: Backup completes successfully
+    - **backup_failure**: Backup fails or is cancelled
+  </Tab>
+
+  <Tab title="Restore Events">
+    - **restore_success**: File restoration completes
+    - **restore_failure**: Restoration fails
+  </Tab>
+
+  <Tab title="Maintenance Events">
+    - **check_success**: Repository check passes
+    - **check_failure**: Repository check finds errors
+    - **schedule_failure**: Scheduled job fails to execute
+  </Tab>
+</Tabs>
+
+## Repository Filtering
+
+Monitor specific repositories or all repositories:
+
+```python
+# From notifications.py:37-38
+monitor_all_repositories: bool = Field(default=True)
+repository_ids: Optional[List[int]] = Field(default=None)
+```
+
+<Tabs>
+  <Tab title="All Repositories">
+    **Monitor everything**
+
+    ```json
+    {
+      "monitor_all_repositories": true,
+      "repository_ids": null
+    }
+    ```
+
+    Receives notifications for all backup operations across all repositories.
+  </Tab>
+
+  <Tab title="Specific Repositories">
+    **Selective monitoring**
+
+    ```json
+    {
+      "monitor_all_repositories": false,
+      "repository_ids": [1, 3, 5]
+    }
+    ```
+
+    Only receives notifications for repositories with IDs 1, 3, and 5.
+  </Tab>
+</Tabs>
+
+**Use Case Example:**
+```json
+[
+  {
+    "name": "Critical Systems Slack",
+    "service_url": "slack://TokenA/TokenB/TokenC/#critical",
+    "monitor_all_repositories": false,
+    "repository_ids": [1, 2],  // Production repos only
+    "notify_on_backup_failure": true
+  },
+  {
+    "name": "All Events Email",
+    "service_url": "mailto://admin:pass@smtp.example.com?to=admin@example.com",
+    "monitor_all_repositories": true,
+    "notify_on_backup_success": true,
+    "notify_on_backup_failure": true
+  }
+]
+```
+
+## Title Customization
+
+Customize notification titles for easy identification:
+
+```python
+# From notifications.py:26-27
+title_prefix: Optional[str] = Field(default=None, max_length=100)
+include_job_name_in_title: bool = Field(default=False)
+```
+
+**Examples:**
+
+```
+# Without customization
+"Backup Failed"
+
+# With title_prefix="[PROD]"
+"[PROD] Backup Failed"
+
+# With title_prefix="[PROD]" and include_job_name_in_title=true
+"[PROD] Daily Backup: Backup Failed"
+```
+
+## Managing Notifications
+
+### List All Notifications
+
+```bash
+GET /api/notifications
+```
+
+```python
+# From notifications.py:100-107
+@router.get("", response_model=List[NotificationSettingsResponse])
+async def list_notification_settings(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    settings = db.query(NotificationSettings).all()
+    return settings
+```
+
+**Response:**
+```json
+[
+  {
+    "id": 1,
+    "name": "Production Slack",
+    "service_url": "slack://TokenA/TokenB/TokenC",
+    "enabled": true,
+    "title_prefix": "[PROD]",
+    "include_job_name_in_title": true,
+    "notify_on_backup_failure": true,
+    "monitor_all_repositories": true,
+    "repositories": [],
+    "created_at": "2026-02-01T10:00:00Z",
+    "updated_at": "2026-02-28T10:00:00Z",
+    "last_used_at": "2026-02-28T10:30:00Z"
+  }
+]
+```
+
+### Update Notification Settings
+
+```bash
+PUT /api/notifications/{setting_id}
+```
+
+```python
+# From notifications.py:157-194
+@router.put("/{setting_id}", response_model=NotificationSettingsResponse)
+async def update_notification_setting(
+    setting_id: int,
+    setting_data: NotificationSettingsUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    setting = db.query(NotificationSettings).filter(
+        NotificationSettings.id == setting_id
+    ).first()
+    
+    # Update fields
+    update_data = setting_data.model_dump(exclude_unset=True)
+    repository_ids = update_data.pop('repository_ids', None)
+    
+    for key, value in update_data.items():
+        setattr(setting, key, value)
+    
+    # Update repository associations
+    if repository_ids is not None:
+        if not setting.monitor_all_repositories and repository_ids:
+            repositories = db.query(Repository).filter(Repository.id.in_(repository_ids)).all()
+            setting.repositories = repositories
+```
+
+### Delete Notification Settings
+
+```bash
+DELETE /api/notifications/{setting_id}
+```
+
+```python
+# From notifications.py:197-216
+@router.delete("/{setting_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_notification_setting(
+    setting_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    setting = db.query(NotificationSettings).filter(
+        NotificationSettings.id == setting_id
+    ).first()
+    
+    if not setting:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Notification setting not found"
+        )
+    
+    db.delete(setting)
+    db.commit()
+```
+
+## Notification Data Model
+
+```python
+# From notifications.py:67-92
+class NotificationSettingsResponse(BaseModel):
+    id: int
+    name: str
+    service_url: str
+    enabled: bool
+    title_prefix: Optional[str]
+    include_job_name_in_title: bool
+    notify_on_backup_start: bool
+    notify_on_backup_success: bool
+    notify_on_backup_failure: bool
+    notify_on_restore_success: bool
+    notify_on_restore_failure: bool
+    notify_on_check_success: bool
+    notify_on_check_failure: bool
+    notify_on_schedule_failure: bool
+    monitor_all_repositories: bool
+    repositories: List[RepositoryInfo]
+    created_at: datetime
+    updated_at: datetime
+    last_used_at: Optional[datetime]
+```
+
+<Card title="Notification Best Practices" icon="bell">
+  - **Test First**: Always test service URLs before saving
+  - **Failure Alerts**: Enable failure notifications for critical monitoring
+  - **Success Spam**: Avoid success notifications unless needed (reduces noise)
+  - **Title Prefixes**: Use environment tags like [PROD], [DEV], [STAGING]
+  - **Multiple Services**: Configure different services for different severity levels
+  - **Repository Filtering**: Use selective monitoring for large deployments
+  - **Quiet Hours**: Some services support quiet hours in their configuration
+</Card>
+
+## Common Integration Examples
+
+### Production Alert Stack
+
+```json
+[
+  {
+    "name": "Critical Failures (PagerDuty)",
+    "service_url": "pagerduty://IntegrationKey@ApiKey",
+    "notify_on_backup_failure": true,
+    "notify_on_check_failure": true,
+    "monitor_all_repositories": false,
+    "repository_ids": [1, 2, 3]  // Production only
+  },
+  {
+    "name": "Team Slack",
+    "service_url": "slack://TokenA/TokenB/TokenC/#backups",
+    "title_prefix": "[PROD]",
+    "notify_on_backup_success": true,
+    "notify_on_backup_failure": true,
+    "monitor_all_repositories": true
+  },
+  {
+    "name": "Admin Email",
+    "service_url": "mailto://alerts:password@smtp.company.com?to=admin@company.com",
+    "notify_on_backup_failure": true,
+    "notify_on_schedule_failure": true,
+    "monitor_all_repositories": true
+  }
+]
+```
+
+### Home Lab Setup
+
+```json
+[
+  {
+    "name": "Discord Alerts",
+    "service_url": "discord://WebhookID/WebhookToken",
+    "notify_on_backup_failure": true,
+    "notify_on_check_failure": true
+  },
+  {
+    "name": "Pushover Mobile",
+    "service_url": "pover://UserKey@AppToken",
+    "notify_on_backup_failure": true
+  }
+]
+```

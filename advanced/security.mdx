@@ -1,0 +1,564 @@
+---
+title: 'Security Best Practices'
+description: 'Authentication, SSH keys, encryption, and security hardening for Borg UI'
+---
+
+# Security Best Practices
+
+Secure your Borg UI installation with authentication, SSH key management, and encryption.
+
+---
+
+## Authentication Methods
+
+Borg UI supports two authentication modes: **JWT-based authentication** (default) and **Reverse Proxy authentication** (for SSO/enterprise setups).
+
+### JWT Authentication (Default)
+
+**How it works:**
+- Users authenticate with username/password
+- JWT tokens are issued with configurable expiration (default: 24 hours)
+- Tokens use HS256 algorithm with secret key encryption
+- Passwords are hashed using bcrypt (salt rounds: 12)
+
+**Configuration:**
+
+```yaml
+# docker-compose.yml
+environment:
+  - SECRET_KEY=your-custom-secret-key-here  # Optional: auto-generated if not set
+  - ACCESS_TOKEN_EXPIRE_MINUTES=1440        # 24 hours (default)
+```
+
+**Implementation details** (from `app/core/security.py:18-39`):
+```python
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    """Create a JWT access token"""
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=settings.access_token_expire_minutes)
+    
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
+    return encoded_jwt
+```
+
+**First User Setup:**
+- Default admin account is created automatically on first run
+- Username: `admin`
+- Password: `admin123` (or set via `INITIAL_ADMIN_PASSWORD` environment variable)
+- **Must change password** on first login (enforced by `must_change_password` flag)
+
+<Warning>
+  The default admin password `admin123` is **insecure**. Change it immediately after first login or set `INITIAL_ADMIN_PASSWORD` before deployment.
+</Warning>
+
+### Reverse Proxy Authentication
+
+**Use case:** Integrate with existing SSO systems (Authelia, Authentik, Keycloak, etc.)
+
+**Configuration:**
+
+```yaml
+# docker-compose.yml
+environment:
+  - DISABLE_AUTHENTICATION=true
+  - PROXY_AUTH_HEADER=X-Forwarded-User  # Header containing authenticated username
+```
+
+**How it works** (from `app/core/security.py:97-169`):
+1. Borg UI trusts the `X-Forwarded-User` header from reverse proxy
+2. Users are **auto-created** on first access (no manual setup required)
+3. Alternative headers are checked: `X-Remote-User`, `Remote-User`, `X-authentik-username`, `X-Forwarded-User`
+4. If no header is present, defaults to `admin` user (for direct access)
+
+**Supported headers** (checked in order):
+- Configured header (`PROXY_AUTH_HEADER`)
+- `X-Remote-User`
+- `Remote-User`
+- `X-authentik-username`
+- `X-Forwarded-User`
+
+**Nginx example:**
+```nginx
+location /borg/ {
+    proxy_pass http://localhost:8081/;
+    proxy_set_header X-Forwarded-User $remote_user;
+    # Or with Authelia/Authentik:
+    # auth_request /authelia;
+    # proxy_set_header X-Forwarded-User $http_remote_user;
+}
+```
+
+<Warning>
+  **Security critical:** When using proxy auth, Borg UI **must only be accessible through the reverse proxy**. Bind to `127.0.0.1` or use firewall rules to prevent direct access.
+</Warning>
+
+**Example with Authelia:**
+```yaml
+# docker-compose.yml
+services:
+  borg-ui:
+    environment:
+      - DISABLE_AUTHENTICATION=true
+      - PROXY_AUTH_HEADER=Remote-User
+    # Bind only to localhost
+    ports:
+      - "127.0.0.1:8081:8081"
+```
+
+---
+
+## Secret Key Management
+
+The `SECRET_KEY` is used for JWT signing and data encryption (SSH keys, repository passwords).
+
+### Auto-Generation (Recommended)
+
+**Default behavior** (from `app/config.py:144-162`):
+1. On first run, a cryptographically secure key is auto-generated
+2. Saved to `/data/.secret_key` with `0600` permissions
+3. Reused across container restarts (persisted in volume)
+
+```bash
+# Auto-generated key format (32 bytes, URL-safe base64)
+openssl rand -base64 32
+# Example: xQ7vK2_8Rj9L5mP4nW1qY3tZ6uV8wA0bC1dE2fG3hI4=
+```
+
+### Manual Configuration
+
+**Option 1: Environment variable**
+```yaml
+environment:
+  - SECRET_KEY=your-custom-secret-key-minimum-32-characters
+```
+
+**Option 2: Docker secret**
+```yaml
+secrets:
+  - secret_key
+
+secrets:
+  secret_key:
+    file: ./secret_key.txt
+```
+
+<Note>
+  **Secret key length:** Minimum 32 characters recommended. The system validates length in production mode (`app/config.py:183-187`).
+</Note>
+
+### Key Rotation
+
+**Warning:** Rotating the secret key will:
+- Invalidate all existing JWT tokens (users must re-login)
+- Make encrypted SSH keys unreadable (requires re-importing keys)
+
+**If you must rotate:**
+1. Export all SSH keys before rotation
+2. Update `SECRET_KEY` environment variable
+3. Restart container
+4. Re-import SSH keys
+5. Notify users to re-login
+
+---
+
+## SSH Key Security
+
+### Storage and Encryption
+
+**How SSH keys are stored** (from documentation analysis):
+- Private keys are **encrypted** using Fernet symmetric encryption
+- Encryption key derived from `SECRET_KEY` (first 32 bytes)
+- Stored in SQLite database (`/data/borg.db`)
+- Decrypted only during backup/mount operations (temporary files)
+
+**Encryption implementation** (`app/core/security.py:283-327`):
+```python
+def encrypt_secret(value: str) -> str:
+    """Encrypt using Fernet (AES-128 in CBC mode with HMAC)"""
+    encryption_key = settings.secret_key.encode()[:32]
+    cipher = Fernet(base64.urlsafe_b64encode(encryption_key))
+    encrypted_value = cipher.encrypt(value.encode()).decode()
+    return encrypted_value
+
+def decrypt_secret(encrypted_value: str) -> str:
+    """Decrypt Fernet-encrypted value"""
+    encryption_key = settings.secret_key.encode()[:32]
+    cipher = Fernet(base64.urlsafe_b64encode(encryption_key))
+    decrypted_value = cipher.decrypt(encrypted_value.encode()).decode()
+    return decrypted_value
+```
+
+### SSH Key Types
+
+**Recommended: ED25519** (modern, smaller, faster)
+```bash
+# Generated via UI: Remote Machines → Generate System Key
+# Algorithm: ssh-keygen -t ed25519 -N ""
+```
+
+**Alternative: RSA 4096** (maximum compatibility)
+```bash
+# For legacy systems that don't support ED25519
+# Algorithm: ssh-keygen -t rsa -b 4096 -N ""
+```
+
+### Deployment Security
+
+**Best practice: Use UI-based deployment**
+1. Go to **Remote Machines** → **Deploy Key to Server**
+2. Enter password (used **once** for deployment)
+3. Password is **not stored** - only used to install public key
+4. Future connections use passwordless SSH key authentication
+
+**Manual deployment with restrictions:**
+```bash
+# On remote server: restrict SSH key to borg-only access
+vim ~/.ssh/authorized_keys
+```
+
+Add command restriction:
+```bash
+command="borg serve --restrict-to-path /backups/borg-repo",restrict ssh-ed25519 AAAAC3... borg-web-ui
+```
+
+**Benefits:**
+- Prevents shell access with the backup key
+- Restricts borg operations to specific repository path
+- Mitigates damage if key is compromised
+
+---
+
+## Repository Encryption
+
+Borg repositories should always use encryption to protect backup data.
+
+### Encryption Modes
+
+**Recommended: `repokey-blake2` (fastest, most secure)**
+```bash
+# Encryption key stored in repository metadata
+# Uses BLAKE2b for authentication (faster than SHA256)
+borg init --encryption=repokey-blake2 /path/to/repo
+```
+
+**Alternative: `keyfile-blake2` (key stored separately)**
+```bash
+# Encryption key stored in ~/.config/borg/keys/
+# More secure if repository storage is compromised
+borg init --encryption=keyfile-blake2 /path/to/repo
+```
+
+**For non-sensitive data: `none`**
+```bash
+# No encryption (faster backups, but data readable by anyone)
+borg init --encryption=none /path/to/repo
+```
+
+<Warning>
+  **Always use encryption for production data.** Unencrypted repositories expose all backup contents to anyone with file access.
+</Warning>
+
+### Passphrase Management
+
+**During repository creation:**
+- Borg UI prompts for passphrase
+- Passphrase is **encrypted** before storage in database
+- Decrypted only during backup/restore operations
+
+**Passphrase security:**
+- Minimum 20 characters recommended
+- Use password manager to generate strong passphrases
+- Store passphrase separately from repository backups
+
+**Keyfile storage:**
+For `keyfile` mode, export and backup the key:
+```bash
+docker exec borg-web-ui borg key export /path/to/repo /data/backup-keyfile.txt
+```
+
+Store this file **separately** from your backups (e.g., password manager).
+
+---
+
+## Network Security
+
+### Binding and Firewall
+
+**Internal network only:**
+```yaml
+# docker-compose.yml
+ports:
+  - "127.0.0.1:8081:8081"  # Localhost only
+```
+
+Access via reverse proxy:
+```nginx
+location /borg/ {
+    proxy_pass http://127.0.0.1:8081/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+}
+```
+
+**Firewall rules (if exposing directly):**
+```bash
+# UFW (Ubuntu/Debian)
+sudo ufw allow from 192.168.1.0/24 to any port 8081
+
+# iptables
+sudo iptables -A INPUT -p tcp -s 192.168.1.0/24 --dport 8081 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 8081 -j DROP
+```
+
+### HTTPS/TLS
+
+**Use reverse proxy for TLS termination:**
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name backups.example.com;
+    
+    ssl_certificate /etc/letsencrypt/live/backups.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/backups.example.com/privkey.pem;
+    
+    # Modern TLS configuration
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+    
+    location / {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+<Note>
+  Borg UI does not include built-in TLS. Always use a reverse proxy (Nginx, Caddy, Traefik) for HTTPS.
+</Note>
+
+---
+
+## User Management
+
+### Creating Users
+
+**Via Web Interface:**
+1. Login as admin
+2. Go to **Settings** → **Users**
+3. Click **Add User**
+4. Set username, password, email
+5. Assign admin privileges if needed
+
+**Password requirements:**
+- Minimum 8 characters (enforced client-side)
+- Passwords are bcrypt-hashed before storage
+- Salt rounds: 12 (from `app/core/security.py:21-27`)
+
+### Admin Privileges
+
+**Admin users can:**
+- Create/delete users
+- Modify system settings
+- Access all repositories
+- View system logs
+- Manage SSH connections
+
+**Regular users can:**
+- Create their own repositories
+- Run backups on owned repositories
+- Browse and restore from owned repositories
+- Manage their own schedules
+
+<Warning>
+  Admin accounts have full system access. Limit admin privileges to trusted users only.
+</Warning>
+
+### User Deactivation
+
+**Disable user instead of deleting:**
+1. Settings → Users → Edit User
+2. Uncheck "Active"
+3. Save
+
+**Effect:**
+- User cannot login
+- Existing sessions are invalidated
+- User data (repositories, schedules) is preserved
+- Can be reactivated later
+
+---
+
+## Security Hardening
+
+### Docker Security
+
+**Run as non-root user:**
+```yaml
+# docker-compose.yml
+environment:
+  - PUID=1000  # Your user ID
+  - PGID=1000  # Your group ID
+```
+
+**Read-only root filesystem (advanced):**
+```yaml
+services:
+  borg-ui:
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/tmp
+    volumes:
+      - ./data:/data:rw  # Only /data is writable
+```
+
+**Drop unnecessary capabilities:**
+```yaml
+cap_drop:
+  - ALL
+cap_add:
+  - CHOWN
+  - DAC_OVERRIDE
+  - FOWNER
+  - SETGID
+  - SETUID
+```
+
+### File Permissions
+
+**Secure data directory:**
+```bash
+# On host system
+chmod 700 /path/to/data
+chown 1000:1000 /path/to/data  # Match PUID/PGID
+```
+
+**SSH key permissions:**
+```bash
+# Inside container (automatic on startup)
+chmod 700 /home/borg/.ssh
+chmod 600 /home/borg/.ssh/id_ed25519
+chmod 644 /home/borg/.ssh/id_ed25519.pub
+```
+
+### Database Security
+
+**Backup database regularly:**
+```bash
+# Backup SQLite database
+docker exec borg-web-ui sqlite3 /data/borg.db ".backup /data/borg-backup.db"
+
+# Copy to host
+docker cp borg-web-ui:/data/borg-backup.db ./borg-db-$(date +%Y%m%d).db
+```
+
+<Warning>
+  Database contains **encrypted SSH keys** and **repository passphrases**. Store backups securely and encrypt them.
+</Warning>
+
+---
+
+## Audit and Logging
+
+### Security Event Logging
+
+**Logged security events:**
+- User authentication attempts (success/failure)
+- User creation/deletion
+- SSH key generation/deployment
+- Repository access
+- System setting changes
+
+**View logs:**
+```bash
+# Real-time logs
+docker logs -f borg-web-ui
+
+# Filter security events
+docker logs borg-web-ui | grep -i "auth\|login\|user"
+
+# Persistent logs
+cat /path/to/data/logs/borg-ui.log
+```
+
+**Log level configuration:**
+```yaml
+environment:
+  - LOG_LEVEL=INFO  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+```
+
+### Failed Login Monitoring
+
+**Watch for authentication failures:**
+```bash
+docker logs borg-web-ui | grep "Could not validate credentials"
+```
+
+Consider implementing fail2ban for automated IP blocking after multiple failures.
+
+---
+
+## Security Checklist
+
+<Accordion title="Production Deployment Checklist">
+  
+  **Authentication:**
+  - [ ] Changed default admin password
+  - [ ] Created individual user accounts (no shared credentials)
+  - [ ] Disabled unused admin accounts
+  - [ ] Configured `SECRET_KEY` (auto-generated or custom)
+  
+  **SSH Keys:**
+  - [ ] Generated ED25519 system key
+  - [ ] Deployed keys with `borg serve --restrict-to-path` restrictions
+  - [ ] Verified SSH key permissions (600 for private, 644 for public)
+  - [ ] Documented key locations and backup procedures
+  
+  **Repositories:**
+  - [ ] Enabled encryption (repokey-blake2 or keyfile-blake2)
+  - [ ] Set strong passphrases (20+ characters)
+  - [ ] Backed up keyfiles separately
+  - [ ] Tested repository recovery procedure
+  
+  **Network:**
+  - [ ] Configured HTTPS via reverse proxy
+  - [ ] Bound to localhost or restricted network
+  - [ ] Configured firewall rules
+  - [ ] Tested access from expected networks only
+  
+  **System:**
+  - [ ] Running as non-root user (PUID/PGID configured)
+  - [ ] Data directory permissions secured (700)
+  - [ ] Database backups scheduled
+  - [ ] Log monitoring configured
+  - [ ] Updated to latest version
+  
+</Accordion>
+
+---
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="SSH Keys Guide" icon="key" href="/docs/ssh-keys">
+    Detailed SSH key setup and management
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Environment variables and system settings
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/advanced/troubleshooting">
+    Common security-related issues and solutions
+  </Card>
+  <Card title="Maintenance" icon="screwdriver-wrench" href="/advanced/maintenance">
+    Database backups and system maintenance
+  </Card>
+</CardGroup>

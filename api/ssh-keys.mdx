@@ -1,0 +1,416 @@
+---
+title: 'SSH Keys'
+description: 'Manage SSH keys and connections for remote repositories'
+---
+
+## Overview
+
+SSH key endpoints allow you to generate, import, and manage SSH keys for connecting to remote Borg repositories. Borg UI uses a single system SSH key for all connections.
+
+## Get System SSH Key
+
+Get the system SSH key (there can be only one).
+
+**Endpoint:** `GET /api/ssh-keys/system-key`
+
+**Example Request:**
+```bash
+curl http://localhost:5000/api/ssh-keys/system-key \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "exists": true,
+  "ssh_key": {
+    "id": 1,
+    "name": "System SSH Key",
+    "description": "System SSH key for all remote connections",
+    "key_type": "ed25519",
+    "public_key": "ssh-ed25519 AAAAC3Nz... user@host",
+    "fingerprint": "SHA256:abc123def456...",
+    "is_active": true,
+    "created_at": "2024-01-01T00:00:00Z",
+    "updated_at": "2024-01-01T00:00:00Z",
+    "connection_count": 3,
+    "active_connections": 2
+  }
+}
+```
+
+<ResponseField name="exists" type="boolean">
+  Whether a system SSH key has been created
+</ResponseField>
+
+<ResponseField name="ssh_key.key_type" type="string">
+  SSH key algorithm: `rsa`, `ed25519`, or `ecdsa`
+</ResponseField>
+
+<ResponseField name="ssh_key.fingerprint" type="string">
+  SHA256 fingerprint of the public key
+</ResponseField>
+
+<ResponseField name="ssh_key.connection_count" type="integer">
+  Total number of SSH connections configured
+</ResponseField>
+
+<ResponseField name="ssh_key.active_connections" type="integer">
+  Number of connections with status "connected"
+</ResponseField>
+
+## Generate System SSH Key
+
+Generate a new system SSH key (one-time only).
+
+**Endpoint:** `POST /api/ssh-keys/generate`
+
+**Admin Only:** Yes
+
+<ParamField body="name" type="string" required>
+  Name for the SSH key
+</ParamField>
+
+<ParamField body="key_type" type="string" default="rsa">
+  Key algorithm: `rsa`, `ed25519`, or `ecdsa`
+</ParamField>
+
+<ParamField body="description" type="string">
+  Optional description
+</ParamField>
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/ssh-keys/generate \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "System SSH Key",
+    "key_type": "ed25519",
+    "description": "System key for remote repositories"
+  }'
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "System SSH key generated successfully",
+  "ssh_key": {
+    "id": 1,
+    "name": "System SSH Key",
+    "description": "System key for remote repositories",
+    "key_type": "ed25519",
+    "public_key": "ssh-ed25519 AAAAC3Nz... borg@borgui",
+    "fingerprint": "SHA256:abc123def456...",
+    "is_system_key": true,
+    "is_active": true
+  }
+}
+```
+
+## Import System SSH Key
+
+Import an existing SSH key from the filesystem.
+
+**Endpoint:** `POST /api/ssh-keys/import`
+
+**Admin Only:** Yes
+
+<ParamField body="name" type="string" required>
+  Name for the SSH key
+</ParamField>
+
+<ParamField body="private_key_path" type="string" required>
+  Path to private key file (e.g., `/local/.ssh/id_ed25519`)
+</ParamField>
+
+<ParamField body="public_key_path" type="string">
+  Path to public key file. If not provided, will try `{private_key_path}.pub`
+</ParamField>
+
+<ParamField body="description" type="string">
+  Optional description
+</ParamField>
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/ssh-keys/import \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Imported Key",
+    "private_key_path": "/local/.ssh/id_ed25519",
+    "description": "Existing SSH key"
+  }'
+```
+
+## Delete SSH Key
+
+Delete the system SSH key.
+
+**Endpoint:** `DELETE /api/ssh-keys/{key_id}`
+
+**Admin Only:** Yes
+
+**Example Request:**
+```bash
+curl -X DELETE http://localhost:5000/api/ssh-keys/1 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+## SSH Connections
+
+### List Connections
+
+Get all SSH connections with storage information.
+
+**Endpoint:** `GET /api/ssh-keys/connections`
+
+**Example Request:**
+```bash
+curl http://localhost:5000/api/ssh-keys/connections \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "connections": [
+    {
+      "id": 1,
+      "ssh_key_id": 1,
+      "ssh_key_name": "System SSH Key",
+      "host": "backup.example.com",
+      "username": "borg",
+      "port": 22,
+      "use_sftp_mode": true,
+      "default_path": "/backups",
+      "ssh_path_prefix": null,
+      "mount_point": "/remote-backups",
+      "status": "connected",
+      "last_test": "2024-01-15T10:00:00Z",
+      "last_success": "2024-01-15T10:00:00Z",
+      "error_message": null,
+      "storage": {
+        "total": 1099511627776,
+        "total_formatted": "1.00 TB",
+        "used": 549755813888,
+        "used_formatted": "512.00 GB",
+        "available": 549755813888,
+        "available_formatted": "512.00 GB",
+        "percent_used": 50.0,
+        "last_check": "2024-01-15T10:00:00Z"
+      },
+      "created_at": "2024-01-01T00:00:00Z"
+    }
+  ]
+}
+```
+
+### Update Connection
+
+Update SSH connection settings.
+
+**Endpoint:** `PUT /api/ssh-keys/connections/{connection_id}`
+
+<ParamField body="host" type="string">
+  SSH host
+</ParamField>
+
+<ParamField body="username" type="string">
+  SSH username
+</ParamField>
+
+<ParamField body="port" type="integer">
+  SSH port
+</ParamField>
+
+<ParamField body="default_path" type="string">
+  Default starting path for SSH browsing
+</ParamField>
+
+<ParamField body="ssh_path_prefix" type="string">
+  Path prefix for SSH commands (e.g., `/volume1` for Synology). SFTP uses path as-is, SSH prepends this prefix.
+</ParamField>
+
+<ParamField body="mount_point" type="string">
+  Logical mount point (e.g., `/hetzner`)
+</ParamField>
+
+<ParamField body="use_sftp_mode" type="boolean">
+  Use SFTP mode for ssh-copy-id (required by Hetzner, disable for Synology/older systems)
+</ParamField>
+
+**Example Request:**
+```bash
+curl -X PUT http://localhost:5000/api/ssh-keys/connections/1 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "default_path": "/new/path",
+    "mount_point": "/remote"
+  }'
+```
+
+### Test Connection
+
+Test an existing SSH connection.
+
+**Endpoint:** `POST /api/ssh-keys/connections/{connection_id}/test`
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/ssh-keys/connections/1/test \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Connection tested successfully",
+  "status": "connected",
+  "error": null
+}
+```
+
+### Refresh Storage Info
+
+Refresh storage information for a connection.
+
+**Endpoint:** `POST /api/ssh-keys/connections/{connection_id}/refresh-storage`
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/ssh-keys/connections/1/refresh-storage \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Storage information refreshed successfully",
+  "storage": {
+    "total": 1099511627776,
+    "total_formatted": "1.00 TB",
+    "used": 549755813888,
+    "used_formatted": "512.00 GB",
+    "available": 549755813888,
+    "available_formatted": "512.00 GB",
+    "percent_used": 50.0,
+    "last_check": "2024-01-15T10:05:00Z"
+  }
+}
+```
+
+### Redeploy SSH Key
+
+Redeploy the system SSH key to an existing connection.
+
+**Endpoint:** `POST /api/ssh-keys/connections/{connection_id}/redeploy`
+
+<ParamField body="password" type="string" required>
+  SSH password for authentication
+</ParamField>
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/ssh-keys/connections/1/redeploy \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "password": "ssh_password"
+  }'
+```
+
+### Delete Connection
+
+Delete an SSH connection.
+
+**Endpoint:** `DELETE /api/ssh-keys/connections/{connection_id}`
+
+**Example Request:**
+```bash
+curl -X DELETE http://localhost:5000/api/ssh-keys/connections/1 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+## Quick SSH Setup
+
+Generate SSH key and deploy to remote server in one step.
+
+**Endpoint:** `POST /api/ssh-keys/quick-setup`
+
+**Admin Only:** Yes
+
+<ParamField body="name" type="string" required>
+  Name for the SSH key
+</ParamField>
+
+<ParamField body="key_type" type="string" default="rsa">
+  Key algorithm: `rsa`, `ed25519`, or `ecdsa`
+</ParamField>
+
+<ParamField body="host" type="string">
+  Remote host for deployment
+</ParamField>
+
+<ParamField body="username" type="string">
+  SSH username
+</ParamField>
+
+<ParamField body="port" type="integer" default={22}>
+  SSH port
+</ParamField>
+
+<ParamField body="password" type="string">
+  SSH password for initial deployment
+</ParamField>
+
+<ParamField body="skip_deployment" type="boolean" default={false}>
+  Generate key only, skip deployment
+</ParamField>
+
+<ParamField body="use_sftp_mode" type="boolean" default={true}>
+  Use SFTP mode for ssh-copy-id (required by Hetzner, disable for Synology)
+</ParamField>
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/ssh-keys/quick-setup \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Backup Server Key",
+    "key_type": "ed25519",
+    "host": "backup.example.com",
+    "username": "borg",
+    "port": 22,
+    "password": "initial_password",
+    "use_sftp_mode": true
+  }'
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "SSH key generated and deployed successfully",
+  "ssh_key": {
+    "id": 1,
+    "name": "Backup Server Key",
+    "key_type": "ed25519",
+    "public_key": "ssh-ed25519 AAAAC3Nz... borg@borgui"
+  },
+  "connection": {
+    "host": "backup.example.com",
+    "username": "borg",
+    "port": 22,
+    "status": "connected"
+  }
+}
+```

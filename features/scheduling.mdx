@@ -1,0 +1,605 @@
+---
+title: "Backup Scheduling"
+description: "Automate backups with visual cron scheduler, multi-repository support, and comprehensive execution history"
+---
+
+## Overview
+
+Borg UI provides powerful backup scheduling with visual cron expression builder, multi-repository support, execution history tracking, and automatic maintenance operations.
+
+## Visual Cron Builder
+
+Create schedules using a visual interface or cron expressions:
+
+```python
+# From schedule.py:78-84
+class CronExpression(BaseModel):
+    minute: str = "*"
+    hour: str = "*"
+    day_of_month: str = "*"
+    month: str = "*"
+    day_of_week: str = "*"
+```
+
+**Cron Format:**
+```
+┌─────────── minute (0-59)
+│ ┌───────── hour (0-23)
+│ │ ┌─────── day of month (1-31)
+│ │ │ ┌───── month (1-12)
+│ │ │ │ ┌─── day of week (0-6, Sunday=0)
+│ │ │ │ │
+* * * * *
+```
+
+## Common Schedules
+
+Borg UI provides preset cron expressions:
+
+```python
+# From schedule.py:463-527
+@router.get("/cron-presets")
+async def get_cron_presets():
+    presets = [
+        {
+            "name": "Daily at 2 AM",
+            "expression": "0 2 * * *",
+            "description": "Run daily at 2 AM"
+        },
+        {
+            "name": "Weekly on Sunday",
+            "expression": "0 0 * * 0",
+            "description": "Run weekly on Sunday at midnight"
+        },
+        {
+            "name": "Monthly on 1st",
+            "expression": "0 0 1 * *",
+            "description": "Run monthly on the 1st at midnight"
+        },
+        {
+            "name": "Every 6 Hours",
+            "expression": "0 */6 * * *",
+            "description": "Run every 6 hours"
+        },
+        {
+            "name": "Weekdays at 9 AM",
+            "expression": "0 9 * * 1-5",
+            "description": "Run weekdays at 9 AM"
+        }
+    ]
+```
+
+<Tabs>
+  <Tab title="Hourly">
+    ```
+    0 * * * *  # Every hour at :00
+    */15 * * * *  # Every 15 minutes
+    0 */6 * * *  # Every 6 hours
+    ```
+  </Tab>
+
+  <Tab title="Daily">
+    ```
+    0 2 * * *  # Daily at 2 AM
+    0 0 * * *  # Daily at midnight
+    30 3 * * *  # Daily at 3:30 AM
+    ```
+  </Tab>
+
+  <Tab title="Weekly">
+    ```
+    0 0 * * 0  # Sunday at midnight
+    0 2 * * 1  # Monday at 2 AM
+    0 0 * * 0,6  # Weekends at midnight
+    ```
+  </Tab>
+
+  <Tab title="Monthly">
+    ```
+    0 0 1 * *  # 1st of month at midnight
+    0 2 15 * *  # 15th of month at 2 AM
+    0 0 L * *  # Last day of month (not standard cron)
+    ```
+  </Tab>
+</Tabs>
+
+## Creating a Schedule
+
+<Steps>
+  <Step title="Configure Basic Settings">
+    Set up schedule name and timing:
+
+    ```bash
+    POST /api/schedule/
+    ```
+
+    ```json
+    {
+      "name": "Production Daily Backup",
+      "cron_expression": "0 2 * * *",
+      "description": "Daily backup at 2 AM",
+      "enabled": true,
+      "archive_name_template": "prod-{date}-{time}"
+    }
+    ```
+
+    ```python
+    # From schedule.py:28-51
+    class ScheduledJobCreate(BaseModel):
+        name: str
+        cron_expression: str
+        enabled: bool = True
+        description: Optional[str] = None
+        archive_name_template: Optional[str] = None
+    ```
+  </Step>
+
+  <Step title="Select Repositories">
+    Choose single or multiple repositories:
+
+    **Single Repository:**
+    ```json
+    {
+      "repository_id": 1
+    }
+    ```
+
+    **Multiple Repositories:**
+    ```json
+    {
+      "repository_ids": [1, 2, 3]
+    }
+    ```
+
+    ```python
+    # From schedule.py:32-33
+    repository_id: Optional[int] = None  # Single repo
+    repository_ids: Optional[List[int]] = None  # Multi-repo
+    ```
+  </Step>
+
+  <Step title="Configure Maintenance">
+    Set up automatic pruning and compacting:
+
+    ```json
+    {
+      "run_prune_after": true,
+      "run_compact_after": true,
+      "prune_keep_daily": 7,
+      "prune_keep_weekly": 4,
+      "prune_keep_monthly": 6,
+      "prune_keep_yearly": 1
+    }
+    ```
+
+    ```python
+    # From schedule.py:44-51
+    run_prune_after: bool = False
+    run_compact_after: bool = False
+    prune_keep_daily: int = 7
+    prune_keep_weekly: int = 4
+    prune_keep_monthly: int = 6
+    prune_keep_yearly: int = 1
+    ```
+  </Step>
+
+  <Step title="Add Scripts (Optional)">
+    Configure pre/post backup scripts:
+
+    ```json
+    {
+      "run_repository_scripts": false,
+      "pre_backup_script_id": 5,
+      "post_backup_script_id": 6,
+      "pre_backup_script_parameters": {
+        "SERVICE_NAME": "webapp"
+      }
+    }
+    ```
+
+    ```python
+    # From schedule.py:39-43
+    run_repository_scripts: bool = False
+    pre_backup_script_id: Optional[int] = None
+    post_backup_script_id: Optional[int] = None
+    pre_backup_script_parameters: Optional[Dict[str, Any]] = None
+    ```
+  </Step>
+</Steps>
+
+## Multi-Repository Schedules
+
+Backup multiple repositories in a single schedule:
+
+```python
+# From schedule.py:273-306
+if job_data.repository_ids:
+    logger.info("Creating multi-repo schedule",
+               repository_ids=job_data.repository_ids,
+               count=len(job_data.repository_ids))
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_repo_ids = []
+    for repo_id in job_data.repository_ids:
+        if repo_id not in seen:
+            seen.add(repo_id)
+            unique_repo_ids.append(repo_id)
+    
+    # Validate repositories
+    for repo_id in unique_repo_ids:
+        repo = db.query(Repository).filter_by(id=repo_id).first()
+        if not repo:
+            raise HTTPException(status_code=400, detail=f"Repository ID {repo_id} not found")
+```
+
+**Junction Table:**
+```python
+# From schedule.py:367-379
+for order, repo_id in enumerate(unique_repo_ids):
+    repo_link = ScheduledJobRepository(
+        scheduled_job_id=scheduled_job.id,
+        repository_id=repo_id,
+        execution_order=order
+    )
+    db.add(repo_link)
+```
+
+<Note>
+  Multi-repository schedules execute backups sequentially in the specified order. This ensures resources aren't overwhelmed by concurrent operations.
+</Note>
+
+## Archive Name Templates
+
+Customize archive names with template variables:
+
+```python
+# From schedule.py:1052-1064
+if job.archive_name_template:
+    archive_name = job.archive_name_template
+    archive_name = archive_name.replace("{job_name}", job.name)
+    archive_name = archive_name.replace("{repo_name}", repo.name)
+    archive_name = archive_name.replace("{now}", datetime.now().strftime('%Y-%m-%dT%H:%M:%S'))
+    archive_name = archive_name.replace("{date}", datetime.now().strftime('%Y-%m-%d'))
+    archive_name = archive_name.replace("{time}", datetime.now().strftime('%H:%M:%S'))
+    archive_name = archive_name.replace("{timestamp}", str(int(datetime.now().timestamp())))
+else:
+    # Default template
+    archive_name = f"{job.name}-{datetime.now().strftime('%Y-%m-%dT%H:%M:%S')}"
+```
+
+**Available Variables:**
+
+| Variable | Description | Example |
+|----------|-------------|----------|
+| `{job_name}` | Schedule name | `production-backup` |
+| `{repo_name}` | Repository name | `prod-server` |
+| `{now}` | Full timestamp | `2026-02-28T10:30:00` |
+| `{date}` | Date only | `2026-02-28` |
+| `{time}` | Time only | `10:30:00` |
+| `{timestamp}` | Unix timestamp | `1709115000` |
+
+**Examples:**
+```
+{repo_name}-{date}           → prod-server-2026-02-28
+{job_name}-{now}             → daily-backup-2026-02-28T10:30:00
+backup-{timestamp}           → backup-1709115000
+{repo_name}-weekly-{date}    → prod-server-weekly-2026-02-28
+```
+
+## Execution History
+
+Track schedule execution with linked backup jobs:
+
+```python
+# From schedule.py:1041-1049
+backup_job = BackupJob(
+    repository=repo.path,
+    status="pending",
+    scheduled_job_id=job.id,  # Link to scheduled job
+    created_at=datetime.now(timezone.utc)
+)
+db.add(backup_job)
+db.commit()
+```
+
+**Query Scheduled Backups:**
+```bash
+GET /api/backup/jobs?scheduled_only=true
+```
+
+```python
+# From backup.py:89-96
+if scheduled_only:
+    query = query.filter(BackupJob.scheduled_job_id.isnot(None))
+elif manual_only:
+    query = query.filter(BackupJob.scheduled_job_id.is_(None))
+
+jobs = query.order_by(BackupJob.id.desc()).limit(limit).all()
+```
+
+## Next Run Calculation
+
+Borg UI calculates next execution times:
+
+```python
+# From schedule.py:246-249
+cron = croniter.croniter(job_data.cron_expression, datetime.now(timezone.utc))
+next_run = cron.get_next(datetime)
+```
+
+**View Upcoming Jobs:**
+```bash
+GET /api/schedule/upcoming-jobs?hours=24
+```
+
+```python
+# From schedule.py:529-568
+@router.get("/upcoming-jobs")
+async def get_upcoming_jobs(
+    hours: int = Query(24, description="Hours to look ahead"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    jobs = db.query(ScheduledJob).filter(ScheduledJob.enabled == True).all()
+    upcoming_jobs = []
+    
+    end_time = datetime.now(timezone.utc) + timedelta(hours=hours)
+    
+    for job in jobs:
+        cron = croniter.croniter(job.cron_expression, datetime.now(timezone.utc))
+        next_run = cron.get_next(datetime)
+        
+        if next_run <= end_time:
+            upcoming_jobs.append({
+                "id": job.id,
+                "name": job.name,
+                "next_run": serialize_datetime(next_run),
+                "cron_expression": job.cron_expression
+            })
+    
+    upcoming_jobs.sort(key=lambda x: x["next_run"])
+```
+
+## Validating Cron Expressions
+
+Test cron expressions before saving:
+
+```bash
+POST /api/schedule/validate-cron
+```
+
+```json
+{
+  "minute": "0",
+  "hour": "2",
+  "day_of_month": "*",
+  "month": "*",
+  "day_of_week": "*"
+}
+```
+
+```python
+# From schedule.py:1097-1131
+@router.post("/validate-cron")
+async def validate_cron_expression(
+    cron_data: CronExpression,
+    current_user: User = Depends(get_current_user)
+):
+    # Build cron expression
+    cron_expr = f"{cron_data.minute} {cron_data.hour} {cron_data.day_of_month} {cron_data.month} {cron_data.day_of_week}"
+    
+    try:
+        cron = croniter.croniter(cron_expr, datetime.now(timezone.utc))
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Invalid cron expression: {str(e)}",
+            "cron_expression": cron_expr
+        }
+    
+    # Get next 10 run times
+    next_runs = []
+    for i in range(10):
+        next_dt = cron.get_next(datetime)
+        next_runs.append(serialize_datetime(next_dt))
+    
+    return {
+        "success": True,
+        "cron_expression": cron_expr,
+        "next_runs": next_runs
+    }
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "cron_expression": "0 2 * * *",
+  "next_runs": [
+    "2026-02-29T02:00:00Z",
+    "2026-03-01T02:00:00Z",
+    "2026-03-02T02:00:00Z"
+  ]
+}
+```
+
+## Running Schedules Manually
+
+Execute a schedule outside its regular timing:
+
+```bash
+POST /api/schedule/{job_id}/run-now
+```
+
+```python
+# From schedule.py:989-1095
+@router.post("/{job_id}/run-now")
+async def run_scheduled_job_now(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    job = db.query(ScheduledJob).filter(ScheduledJob.id == job_id).first()
+    
+    # Check if multi-repo or single-repo
+    repo_links = db.query(ScheduledJobRepository).filter_by(scheduled_job_id=job.id).all()
+    
+    if repo_links:
+        # Multi-repository schedule
+        asyncio.create_task(execute_multi_repo_schedule_by_id(job_id))
+        return {
+            "message": f"Multi-repository schedule started ({len(repo_links)} repositories)",
+            "status": "pending"
+        }
+```
+
+## Duplicating Schedules
+
+Copy existing schedules with all settings:
+
+```bash
+POST /api/schedule/{job_id}/duplicate
+```
+
+```python
+# From schedule.py:864-987
+@router.post("/{job_id}/duplicate")
+async def duplicate_scheduled_job(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    original_job = db.query(ScheduledJob).filter(ScheduledJob.id == job_id).first()
+    
+    # Generate unique name
+    base_name = f"Copy of {original_job.name}"
+    new_name = base_name
+    counter = 1
+    
+    while db.query(ScheduledJob).filter(ScheduledJob.name == new_name).first():
+        counter += 1
+        new_name = f"{base_name} ({counter})"
+    
+    # Create duplicate with all settings
+    duplicated_job = ScheduledJob(
+        name=new_name,
+        cron_expression=original_job.cron_expression,
+        enabled=False,  # Disabled by default
+        # ... copy all other settings
+    )
+```
+
+<Note>
+  Duplicated schedules are disabled by default to prevent accidental execution. Enable them manually after review.
+</Note>
+
+## Prune and Compact Settings
+
+Automate repository maintenance after backups:
+
+<Accordion title="Prune Settings">
+  **Remove old archives based on retention policy**
+
+  ```python
+  # From schedule.py:45-50
+  prune_keep_hourly: int = 0
+  prune_keep_daily: int = 7
+  prune_keep_weekly: int = 4
+  prune_keep_monthly: int = 6
+  prune_keep_quarterly: int = 0
+  prune_keep_yearly: int = 1
+  ```
+
+  **Retention Policy:**
+  - Keep 7 daily backups
+  - Keep 4 weekly backups
+  - Keep 6 monthly backups
+  - Keep 1 yearly backup
+  - Delete everything older
+</Accordion>
+
+<Accordion title="Compact Settings">
+  **Reclaim disk space after pruning**
+
+  ```python
+  run_compact_after: bool = False
+  ```
+
+  **What it does:**
+  - Removes deleted archive data
+  - Defragments repository
+  - Frees disk space
+  - Can take significant time for large repos
+</Accordion>
+
+<Warning>
+  Compact operations can be time-consuming and resource-intensive. Only enable if disk space is a concern.
+</Warning>
+
+## Schedule Management
+
+### Enable/Disable Schedules
+
+```bash
+POST /api/schedule/{job_id}/toggle
+```
+
+```python
+# From schedule.py:832-862
+@router.post("/{job_id}/toggle")
+async def toggle_scheduled_job(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    job = db.query(ScheduledJob).filter(ScheduledJob.id == job_id).first()
+    
+    job.enabled = not job.enabled
+    job.updated_at = datetime.now(timezone.utc)
+    db.commit()
+```
+
+### Delete Schedules
+
+```bash
+DELETE /api/schedule/{job_id}
+```
+
+```python
+# From schedule.py:787-830
+@router.delete("/{job_id}")
+async def delete_scheduled_job(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Set scheduled_job_id to NULL for all backup jobs
+    db.query(BackupJob).filter_by(scheduled_job_id=job_id).update(
+        {"scheduled_job_id": None}
+    )
+    
+    # Delete junction table entries
+    db.query(ScheduledJobRepository).filter_by(scheduled_job_id=job_id).delete()
+    
+    # Delete the schedule
+    db.delete(job)
+    db.commit()
+```
+
+<Note>
+  Deleting a schedule preserves backup history by setting `scheduled_job_id` to NULL instead of cascading deletes.
+</Note>
+
+<Card title="Scheduling Best Practices" icon="calendar">
+  - **Off-Peak Hours**: Schedule during low-activity periods (e.g., 2-4 AM)
+  - **Stagger Schedules**: Avoid running all backups simultaneously
+  - **Retention Policies**: Use prune to manage storage automatically
+  - **Test Runs**: Use "Run Now" to test schedules before enabling
+  - **Archive Names**: Use templates for consistent naming
+  - **Multi-Repo**: Group related repositories in single schedules
+  - **Monitoring**: Check execution history regularly
+</Card>

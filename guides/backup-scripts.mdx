@@ -1,0 +1,630 @@
+---
+title: 'Pre/Post Backup Hooks'
+description: 'Automate tasks with custom scripts before and after backups'
+---
+
+## Overview
+
+Backup hooks allow you to run custom scripts at key points in the backup lifecycle:
+- **Pre-backup**: Execute before backup starts
+- **Post-backup**: Execute after backup completes (success, failure, or warning)
+
+Common use cases:
+- Stop/start services during backups
+- Create database dumps
+- Snapshot volumes
+- Send custom notifications
+- Clean up temporary files
+
+## Hook Types
+
+### Repository-Level Hooks
+
+Run every time a specific repository is backed up:
+
+1. Edit repository settings
+2. Scroll to **Backup Hooks** section
+3. Add scripts to:
+   - **Pre-Backup Script**: Runs before backup
+   - **Post-Backup Script**: Runs after backup
+4. Configure timeouts and behavior
+5. Save changes
+
+<Note>
+Repository hooks run for both manual and scheduled backups of that repository.
+</Note>
+
+### Schedule-Level Hooks
+
+Run once per scheduled job, regardless of how many repositories:
+
+1. Create or edit a scheduled job
+2. Enable **Run Repository Scripts** to execute per-repository hooks
+3. Add schedule-level scripts:
+   - **Pre-Backup Script**: Runs once before all repositories
+   - **Post-Backup Script**: Runs once after all repositories
+
+<Tip>
+Schedule-level hooks are ideal for global preparation/cleanup tasks, while repository-level hooks handle repository-specific operations.
+</Tip>
+
+## Script Execution Environment
+
+### Available Variables
+
+Hooks have access to environment variables with backup context:
+
+<CodeGroup>
+```bash Pre-Backup Variables
+#!/bin/bash
+
+# Repository information
+echo "Repository: $BORG_UI_REPO_NAME"      # Repository name
+echo "Path: $BORG_UI_REPO_PATH"           # Repository path
+echo "Job ID: $BORG_UI_JOB_ID"            # Backup job ID
+echo "Hook: $BORG_UI_HOOK_TYPE"           # "pre-backup"
+```
+
+```bash Post-Backup Variables
+#!/bin/bash
+
+# All pre-backup variables, plus:
+echo "Status: $BORG_UI_BACKUP_STATUS"     # success, failure, warning
+echo "Job ID: $BORG_UI_JOB_ID"            # Backup job ID
+echo "Hook: $BORG_UI_HOOK_TYPE"           # "post-backup"
+
+# Conditional logic based on backup result
+if [ "$BORG_UI_BACKUP_STATUS" = "success" ]; then
+    echo "Backup succeeded, running cleanup..."
+fi
+```
+</CodeGroup>
+
+### Working Directory
+
+Scripts execute inside the Borg UI container:
+- **Container path**: `/home/borg`
+- **Host access**: Use `/local/` prefix
+- **Mounted volumes**: As configured in Docker
+
+### Permissions
+
+Scripts run as the `borg` user (UID 1000):
+- Full access to `/data` (container data volume)
+- Access to mounted host directories via `/local/`
+- Can execute Docker commands if socket is mounted
+
+<Warning>
+Do not use `sudo` in scripts. Mount Docker socket or volumes with appropriate permissions instead.
+</Warning>
+
+## Common Patterns
+
+### Stop/Start Docker Containers
+
+Ensure consistent backups of containerized applications:
+
+<CodeGroup>
+```bash Pre-Backup Hook
+#!/bin/bash
+set -e
+
+echo "Stopping containers before backup..."
+
+# Stop containers gracefully
+docker stop myapp
+docker stop database
+
+echo "Containers stopped successfully"
+```
+
+```bash Post-Backup Hook
+#!/bin/bash
+
+echo "Restarting containers after backup..."
+
+# Restart containers
+docker start database
+sleep 5  # Wait for database to be ready
+docker start myapp
+
+if [ "$BORG_UI_BACKUP_STATUS" = "success" ]; then
+    echo "Backup and container restart successful"
+else
+    echo "WARNING: Backup had issues, but containers are restarted"
+fi
+```
+</CodeGroup>
+
+**Docker Compose Setup:**
+```yaml
+services:
+  borg-ui:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+    user: "1000:999"  # 999 is typically docker group
+```
+
+<Tip>
+Add the `borg` user to the `docker` group inside the container for socket access without root.
+</Tip>
+
+### Database Dumps
+
+Create consistent database backups:
+
+<CodeGroup>
+```bash MySQL/MariaDB
+#!/bin/bash
+set -e
+
+DUMP_DIR="/local/backups/mysql-dumps"
+mkdir -p "$DUMP_DIR"
+
+echo "Creating MySQL dump..."
+
+# Dump all databases
+docker exec mysql-container mysqldump \
+  -u root \
+  -p"${MYSQL_ROOT_PASSWORD}" \
+  --all-databases \
+  --single-transaction \
+  --quick \
+  > "${DUMP_DIR}/all-databases.sql"
+
+echo "MySQL dump created: ${DUMP_DIR}/all-databases.sql"
+```
+
+```bash PostgreSQL
+#!/bin/bash
+set -e
+
+DUMP_DIR="/local/backups/postgres-dumps"
+mkdir -p "$DUMP_DIR"
+
+echo "Creating PostgreSQL dump..."
+
+# Dump all databases
+docker exec postgres-container pg_dumpall \
+  -U postgres \
+  > "${DUMP_DIR}/all-databases.sql"
+
+echo "PostgreSQL dump created: ${DUMP_DIR}/all-databases.sql"
+```
+
+```bash MongoDB
+#!/bin/bash
+set -e
+
+DUMP_DIR="/local/backups/mongo-dumps"
+mkdir -p "$DUMP_DIR"
+
+echo "Creating MongoDB dump..."
+
+# Dump all databases
+docker exec mongo-container mongodump \
+  --out "$DUMP_DIR" \
+  --gzip
+
+echo "MongoDB dump created: ${DUMP_DIR}"
+```
+</CodeGroup>
+
+**Post-Backup Cleanup:**
+```bash
+#!/bin/bash
+
+echo "Cleaning up database dumps..."
+rm -rf /local/backups/mysql-dumps/*
+rm -rf /local/backups/postgres-dumps/*
+rm -rf /local/backups/mongo-dumps/*
+
+echo "Dumps cleaned up"
+```
+
+### LVM Snapshots
+
+Create consistent snapshots of logical volumes:
+
+<CodeGroup>
+```bash Create Snapshot (Pre-Backup)
+#!/bin/bash
+set -e
+
+VG="vg0"
+LV="data"
+SNAPSHOT="${LV}_snapshot"
+MOUNT="/local/snapshots/${LV}"
+
+echo "Creating LVM snapshot..."
+
+# Create snapshot (10GB snapshot space)
+lvcreate -L 10G -s -n "$SNAPSHOT" "/dev/${VG}/${LV}"
+
+# Mount snapshot
+mkdir -p "$MOUNT"
+mount "/dev/${VG}/${SNAPSHOT}" "$MOUNT"
+
+echo "Snapshot mounted at: $MOUNT"
+echo "Backup from snapshot instead of live volume"
+```
+
+```bash Remove Snapshot (Post-Backup)
+#!/bin/bash
+
+VG="vg0"
+LV="data"
+SNAPSHOT="${LV}_snapshot"
+MOUNT="/local/snapshots/${LV}"
+
+echo "Removing LVM snapshot..."
+
+# Unmount and remove snapshot
+umount "$MOUNT" 2>/dev/null || true
+lvremove -f "/dev/${VG}/${SNAPSHOT}" 2>/dev/null || true
+
+echo "Snapshot removed"
+```
+</CodeGroup>
+
+<Note>
+Require `--privileged` or device mapping for LVM access from container.
+</Note>
+
+### Custom Notifications
+
+Send notifications beyond Borg UI's built-in options:
+
+<CodeGroup>
+```bash Slack Webhook
+#!/bin/bash
+
+WEBHOOK_URL="https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
+
+if [ "$BORG_UI_BACKUP_STATUS" = "success" ]; then
+    COLOR="good"
+    MESSAGE="Backup completed successfully"
+elif [ "$BORG_UI_BACKUP_STATUS" = "failure" ]; then
+    COLOR="danger"
+    MESSAGE="Backup FAILED"
+else
+    COLOR="warning"
+    MESSAGE="Backup completed with warnings"
+fi
+
+curl -X POST "$WEBHOOK_URL" \
+  -H 'Content-Type: application/json' \
+  -d "{
+    \"attachments\": [{
+      \"color\": \"$COLOR\",
+      \"title\": \"Borg UI Backup\",
+      \"text\": \"$MESSAGE\",
+      \"fields\": [
+        {\"title\": \"Repository\", \"value\": \"$BORG_UI_REPO_NAME\", \"short\": true},
+        {\"title\": \"Status\", \"value\": \"$BORG_UI_BACKUP_STATUS\", \"short\": true}
+      ]
+    }]
+  }"
+```
+
+```bash Email
+#!/bin/bash
+
+TO="admin@example.com"
+FROM="borgui@example.com"
+SUBJECT="Backup: $BORG_UI_REPO_NAME - $BORG_UI_BACKUP_STATUS"
+
+if [ "$BORG_UI_BACKUP_STATUS" = "success" ]; then
+    BODY="Backup completed successfully for repository: $BORG_UI_REPO_NAME"
+elif [ "$BORG_UI_BACKUP_STATUS" = "failure" ]; then
+    BODY="ALERT: Backup FAILED for repository: $BORG_UI_REPO_NAME"
+else
+    BODY="Warning: Backup completed with warnings for repository: $BORG_UI_REPO_NAME"
+fi
+
+echo "$BODY" | mail -s "$SUBJECT" -r "$FROM" "$TO"
+```
+
+```bash Discord Webhook
+#!/bin/bash
+
+WEBHOOK_URL="https://discord.com/api/webhooks/YOUR/WEBHOOK"
+
+if [ "$BORG_UI_BACKUP_STATUS" = "success" ]; then
+    COLOR=5763719  # Green
+    MESSAGE="✅ Backup completed successfully"
+elif [ "$BORG_UI_BACKUP_STATUS" = "failure" ]; then
+    COLOR=15548997  # Red
+    MESSAGE="❌ Backup FAILED"
+else
+    COLOR=16776960  # Yellow
+    MESSAGE="⚠️ Backup completed with warnings"
+fi
+
+curl -X POST "$WEBHOOK_URL" \
+  -H 'Content-Type: application/json' \
+  -d "{
+    \"embeds\": [{
+      \"title\": \"Borg UI Backup\",
+      \"description\": \"$MESSAGE\",
+      \"color\": $COLOR,
+      \"fields\": [
+        {\"name\": \"Repository\", \"value\": \"$BORG_UI_REPO_NAME\", \"inline\": true},
+        {\"name\": \"Status\", \"value\": \"$BORG_UI_BACKUP_STATUS\", \"inline\": true}
+      ]
+    }]
+  }"
+```
+</CodeGroup>
+
+### Verify Backup Integrity
+
+Check backup health after completion:
+
+```bash
+#!/bin/bash
+
+if [ "$BORG_UI_BACKUP_STATUS" = "success" ]; then
+    echo "Running post-backup verification..."
+
+    # Quick integrity check (no data verification)
+    borg check --repository-only "$BORG_UI_REPO_PATH"
+
+    if [ $? -eq 0 ]; then
+        echo "Repository integrity check passed"
+    else
+        echo "WARNING: Repository integrity check failed" >&2
+        exit 1
+    fi
+fi
+```
+
+<Warning>
+Full archive verification (`borg check`) can take hours on large repositories. Use sparingly or in separate scheduled jobs.
+</Warning>
+
+## Hook Configuration
+
+### Timeout Settings
+
+Control how long hooks can run before being terminated:
+
+- **Pre-Hook Timeout**: Default 300 seconds (5 minutes)
+- **Post-Hook Timeout**: Default 300 seconds (5 minutes)
+
+<Tabs>
+  <Tab title="Repository Settings">
+    1. Edit repository
+    2. Scroll to **Backup Hooks**
+    3. Set **Pre-Hook Timeout** and **Post-Hook Timeout**
+    4. Save changes
+  </Tab>
+
+  <Tab title="Schedule Settings">
+    Schedule-level hooks use the same timeout values as repository hooks.
+  </Tab>
+</Tabs>
+
+<Tip>
+Increase timeouts for long-running operations like database dumps or snapshots.
+</Tip>
+
+### Continue on Failure
+
+Control backup behavior when pre-hooks fail:
+
+- **Enabled**: Backup proceeds even if pre-hook fails
+- **Disabled**: Backup is cancelled on pre-hook failure (default)
+
+**When to enable:**
+- Pre-hook is non-critical (e.g., optional notification)
+- Partial hook failure is acceptable
+- Want logs from failed hooks
+
+**When to disable:**
+- Pre-hook creates essential state (e.g., database dump)
+- Hook failure indicates system problem
+- Consistency is critical
+
+<Warning>
+Post-hooks always run after backup, regardless of this setting. They see `BORG_UI_BACKUP_STATUS` to determine success/failure.
+</Warning>
+
+## Testing Scripts
+
+Before using hooks in production, test them thoroughly:
+
+### Test Script Syntax
+
+```bash
+# Inside container or equivalent environment
+bash -n /path/to/script.sh  # Check syntax
+bash -x /path/to/script.sh  # Debug execution
+```
+
+### Test with Variables
+
+Simulate the backup environment:
+
+```bash
+export BORG_UI_REPO_NAME="test-repo"
+export BORG_UI_REPO_PATH="/local/backups/test"
+export BORG_UI_JOB_ID="123"
+export BORG_UI_HOOK_TYPE="pre-backup"
+export BORG_UI_BACKUP_STATUS="success"
+
+./test-hook.sh
+```
+
+### Use the Test API
+
+Borg UI provides a script testing endpoint:
+
+1. Navigate to repository or schedule settings
+2. Click **Test Script** button
+3. Script executes with 30-second timeout
+4. View stdout, stderr, and exit code
+
+<Note>
+Test API uses sandboxed environment without full Docker access.
+</Note>
+
+## Script Library
+
+Borg UI includes a script library for reusable templates:
+
+<Steps>
+  <Step title="Create Script">
+    Navigate to **Scripts** → **Library** → **Create Script**.
+  </Step>
+
+  <Step title="Write Script">
+    Enter your script with parameterized variables:
+
+    ```bash
+    #!/bin/bash
+    CONTAINER_NAME="${CONTAINER_NAME}"
+    docker stop "$CONTAINER_NAME"
+    ```
+  </Step>
+
+  <Step title="Define Parameters">
+    Add parameters for customization:
+    - **Name**: `CONTAINER_NAME`
+    - **Description**: "Docker container to stop"
+    - **Default**: `myapp`
+  </Step>
+
+  <Step title="Use in Repository">
+    When configuring hooks, select script from library and provide parameter values.
+  </Step>
+</Steps>
+
+<Tip>
+Script library promotes reusability across repositories and schedules.
+</Tip>
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Error Handling">
+    Always use `set -e` and handle errors gracefully:
+
+    ```bash
+    #!/bin/bash
+    set -e  # Exit on error
+    set -u  # Exit on undefined variable
+    set -o pipefail  # Pipe failures propagate
+
+    trap 'echo "Error on line $LINENO" >&2' ERR
+    ```
+  </Accordion>
+
+  <Accordion title="Logging">
+    Log script actions for debugging:
+
+    ```bash
+    LOG_FILE="/data/logs/backup-hooks.log"
+    exec 1>> "$LOG_FILE"  # Redirect stdout
+    exec 2>&1  # Redirect stderr to stdout
+
+    echo "[$(date)] Starting pre-backup hook for $BORG_UI_REPO_NAME"
+    ```
+  </Accordion>
+
+  <Accordion title="Timeouts">
+    Add internal timeouts for external commands:
+
+    ```bash
+    # Timeout command after 60 seconds
+    timeout 60s docker stop myapp || echo "Timeout stopping container"
+    ```
+  </Accordion>
+
+  <Accordion title="Idempotency">
+    Make scripts safe to run multiple times:
+
+    ```bash
+    # Check if container is already stopped
+    if docker ps | grep -q myapp; then
+        docker stop myapp
+    else
+        echo "Container already stopped"
+    fi
+    ```
+  </Accordion>
+
+  <Accordion title="Credentials">
+    Store secrets securely, not in scripts:
+
+    ```bash
+    # Use environment variables
+    DB_PASSWORD="${MYSQL_ROOT_PASSWORD}"
+
+    # Or read from file
+    DB_PASSWORD=$(cat /data/secrets/mysql-password)
+    ```
+
+    Configure in Docker:
+    ```yaml
+    environment:
+      - MYSQL_ROOT_PASSWORD=secretpassword
+    volumes:
+      - ./secrets:/data/secrets:ro
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Troubleshooting
+
+### Hook Times Out
+
+- Increase timeout in repository/schedule settings
+- Optimize script performance
+- Add debug logging to identify slow operations
+
+### Hook Fails Silently
+
+Check backup job logs:
+1. Navigate to **Backup Jobs**
+2. Click on the failed job
+3. View logs for hook stderr output
+
+### Docker Commands Fail
+
+Ensure Docker socket is mounted:
+```yaml
+volumes:
+  - /var/run/docker.sock:/var/run/docker.sock:rw
+```
+
+And user has docker group permissions:
+```bash
+docker exec borg-ui groups
+# Should show: borg docker
+```
+
+### Permission Denied
+
+For host file access:
+```bash
+# On host
+sudo chown -R 1000:1000 /path/to/files
+```
+
+Or mount with appropriate permissions:
+```yaml
+volumes:
+  - /path/to/files:/local/files:rw
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Schedule Automated Backups" icon="clock" href="/guides/scheduling-backups">
+    Use hooks in scheduled backup jobs
+  </Card>
+  <Card title="Notification Setup" icon="bell" href="/features/notifications">
+    Configure built-in notifications
+  </Card>
+</CardGroup>

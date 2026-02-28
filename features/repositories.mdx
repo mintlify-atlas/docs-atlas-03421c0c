@@ -1,0 +1,462 @@
+---
+title: "Repository Management"
+description: "Create and manage Borg repositories with support for local storage, SSH, SFTP, encryption, and compression"
+---
+
+## Overview
+
+Borg UI provides comprehensive repository management with support for multiple storage backends, encryption modes, and compression algorithms. Create new repositories or import existing ones with a streamlined workflow.
+
+## Storage Backends
+
+<Tabs>
+  <Tab title="Local Storage">
+    Store repositories directly on the filesystem where Borg UI is running.
+
+    **Path Examples:**
+    - `/data/backups/my-repo` - Container storage
+    - `/local/home/user/backups` - Host filesystem via Docker mount
+
+    <Note>
+      Paths starting with `/local/` access your host filesystem through Docker volume mounts. Paths without this prefix are stored inside the container.
+    </Note>
+  </Tab>
+
+  <Tab title="SSH">
+    Connect to remote servers via SSH for off-site backups.
+
+    **Requirements:**
+    - SSH connection configured in Settings
+    - SSH key authentication recommended
+    - Borg installed on remote server
+
+    **Example SSH URL:**
+    ```
+    ssh://user@backup-server.com:22/backups/my-repo
+    ```
+
+    <Warning>
+      Some restricted SSH servers (like Hetzner Storage Box) don't support diagnostic commands but Borg operations work normally.
+    </Warning>
+  </Tab>
+
+  <Tab title="SFTP">
+    Alternative protocol for remote storage with SFTP support.
+
+    **Use Cases:**
+    - Servers without SSH shell access
+    - Cloud storage providers with SFTP
+    - Network-attached storage (NAS) devices
+  </Tab>
+</Tabs>
+
+## Encryption Modes
+
+Borg UI supports all Borg encryption modes:
+
+<Steps>
+  <Step title="Choose Encryption Mode">
+    Select from available encryption modes based on your security requirements:
+
+    | Mode | Description | Key Storage |
+    |------|-------------|-------------|
+    | **repokey** | Encryption key stored in repository | Repository config |
+    | **keyfile** | Encryption key stored separately | `~/.config/borg/keys/` |
+    | **repokey-blake2** | Repokey with BLAKE2 hash | Repository config |
+    | **keyfile-blake2** | Keyfile with BLAKE2 hash | `~/.config/borg/keys/` |
+    | **none** | No encryption (not recommended) | N/A |
+
+    <Note>
+      **repokey** modes are convenient for single-user setups. **keyfile** modes allow sharing keys across multiple machines.
+    </Note>
+  </Step>
+
+  <Step title="Set Passphrase">
+    For encrypted repositories, provide a strong passphrase:
+
+    ```python
+    # From repositories.py:468-473
+    if repo_data.encryption in ["repokey", "keyfile", "repokey-blake2", "keyfile-blake2"]:
+        if not repo_data.passphrase or repo_data.passphrase.strip() == "":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Passphrase is required for encryption mode '{repo_data.encryption}'"
+            )
+    ```
+
+    <Warning>
+      Store your passphrase securely! Lost passphrases cannot be recovered and will make your backups inaccessible.
+    </Warning>
+  </Step>
+
+  <Step title="Manage Keyfiles (Optional)">
+    For keyfile-based encryption, Borg UI automatically manages keys:
+
+    - **Upload Keyfile**: Import existing keyfiles via API endpoint
+    - **Download Keyfile**: Export keys for backup or sharing
+    - **Automatic Storage**: Keys stored in `~/.config/borg/keys/`
+
+    ```bash
+    # Keyfile naming convention from repositories.py:51-66
+    # /local/Users/foo/backups/repo → local_Users_foo_backups_repo
+    # ssh://user@host:22/backups → user_host_22_backups
+    ```
+  </Step>
+</Steps>
+
+## Compression Algorithms
+
+Choose compression based on your performance vs. storage requirements:
+
+<Accordion title="lz4 (Default)">
+  **Fast compression with minimal CPU overhead**
+
+  - Compression ratio: ~2:1 to 3:1
+  - Speed: Very fast (300+ MB/s)
+  - Best for: General use, modern hardware
+  - CPU usage: Low
+
+  ```python
+  # Default compression from repositories.py:306
+  compression: str = "lz4"
+  ```
+</Accordion>
+
+<Accordion title="zstd">
+  **Balanced compression with good ratio**
+
+  - Compression ratio: ~3:1 to 5:1
+  - Speed: Fast (100-200 MB/s)
+  - Best for: Balance of speed and storage
+  - CPU usage: Medium
+  - Supports compression levels (1-22)
+</Accordion>
+
+<Accordion title="zlib">
+  **Good compression ratio, slower speed**
+
+  - Compression ratio: ~3:1 to 6:1
+  - Speed: Moderate (50-100 MB/s)
+  - Best for: Storage-constrained environments
+  - CPU usage: Medium-High
+  - Supports compression levels (1-9)
+</Accordion>
+
+<Accordion title="lzma">
+  **Maximum compression ratio**
+
+  - Compression ratio: ~5:1 to 10:1
+  - Speed: Slow (20-50 MB/s)
+  - Best for: Archival storage, rarely accessed data
+  - CPU usage: High
+  - Supports compression levels (0-9)
+</Accordion>
+
+<Accordion title="auto">
+  **Borg auto-detection**
+
+  Borg automatically selects compression based on file type:
+  - Already compressed files: No compression
+  - Compressible files: lz4 compression
+</Accordion>
+
+<Accordion title="obfuscate">
+  **Data obfuscation without compression**
+
+  - Makes data patterns less obvious
+  - No compression benefit
+  - Same size as original data
+</Accordion>
+
+## Creating a Repository
+
+<Steps>
+  <Step title="Navigate to Repositories">
+    Click **Repositories** in the sidebar, then **Create Repository**.
+  </Step>
+
+  <Step title="Configure Basic Settings">
+    Fill in repository details:
+
+    ```typescript
+    interface RepositoryCreate {
+      name: string;                    // Display name
+      path: string;                    // Storage path
+      encryption: string;              // Encryption mode
+      compression: string;             // Compression algorithm
+      passphrase?: string;             // Required for encrypted repos
+      source_directories: string[];    // Directories to backup
+      exclude_patterns?: string[];     // File patterns to exclude
+    }
+    ```
+  </Step>
+
+  <Step title="Set Source Directories">
+    Specify which directories to backup:
+
+    ```json
+    {
+      "source_directories": [
+        "/local/home/user/documents",
+        "/local/var/www",
+        "/local/etc/nginx"
+      ]
+    }
+    ```
+
+    <Note>
+      Source directories are required for repositories in **full mode**. Observability-only repositories don't need source directories.
+    </Note>
+  </Step>
+
+  <Step title="Configure Exclusions (Optional)">
+    Use exclude patterns to skip files:
+
+    ```json
+    {
+      "exclude_patterns": [
+        "*.log",
+        "*.tmp",
+        "node_modules",
+        "__pycache__",
+        ".git"
+      ]
+    }
+    ```
+  </Step>
+
+  <Step title="Advanced Options">
+    Configure optional settings:
+
+    - **Remote Path**: Custom borg binary path (e.g., `/usr/local/bin/borg`)
+    - **Custom Flags**: Additional borg create flags
+    - **Bypass Lock**: Read-only access for observe-only mode
+    - **Pre/Post Scripts**: Hooks to run before/after backups
+  </Step>
+</Steps>
+
+## Importing Existing Repositories
+
+Import repositories created outside Borg UI:
+
+```python
+# From repositories.py:704-950
+@router.post("/import")
+async def import_repository(
+    repo_data: RepositoryImport,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Import an existing Borg repository"""
+```
+
+<Steps>
+  <Step title="Verify Repository">
+    Borg UI validates the repository using `borg info`:
+
+    ```python
+    # Verification from repositories.py:831-838
+    verify_result = await verify_existing_repository(
+        repo_path,
+        repo_data.passphrase,
+        ssh_key_id_for_verify,
+        repo_data.remote_path,
+        repo_data.bypass_lock
+    )
+    ```
+  </Step>
+
+  <Step title="Import Keyfile (If Needed)">
+    For keyfile encryption, upload your existing keyfile:
+
+    ```python
+    # Keyfile handling from repositories.py:819-828
+    if repo_data.keyfile_content:
+        keyfile_dir = os.path.expanduser("~/.config/borg/keys")
+        os.makedirs(keyfile_dir, exist_ok=True)
+        keyfile_name = _borg_keyfile_name(repo_path)
+        keyfile_path = os.path.join(keyfile_dir, keyfile_name)
+        with open(keyfile_path, 'w') as f:
+            f.write(repo_data.keyfile_content)
+        os.chmod(keyfile_path, 0o600)
+    ```
+  </Step>
+
+  <Step title="Update Statistics">
+    Archive count and size are automatically updated:
+
+    ```python
+    # From repositories.py:913-920
+    try:
+        await update_repository_stats(repository, db)
+    except Exception as e:
+        logger.warning("Failed to update repository stats after import",
+                      repository=repository.name,
+                      error=str(e))
+    ```
+  </Step>
+</Steps>
+
+## Repository Modes
+
+<Tabs>
+  <Tab title="Full Mode">
+    **Complete backup and observability**
+
+    - Create new backups
+    - Browse and restore archives
+    - Schedule automated backups
+    - Full repository management
+
+    ```python
+    # From repositories.py:318
+    mode: str = "full"  # full: backups + observability
+    ```
+  </Tab>
+
+  <Tab title="Observe Mode">
+    **Read-only observability**
+
+    - Browse existing archives
+    - Restore files from backups
+    - View repository statistics
+    - Cannot create new backups
+
+    ```python
+    # From repositories.py:319
+    bypass_lock: bool = False  # Use --bypass-lock for read-only access
+    ```
+
+    <Note>
+      Observe mode is perfect for repositories managed by external systems where you only need restore capabilities.
+    </Note>
+  </Tab>
+</Tabs>
+
+## SSH Path Prefix
+
+For remote storage with non-standard paths (e.g., Synology NAS):
+
+```python
+# From repositories.py:529-541
+ssh_path_prefix = connection_details.get("ssh_path_prefix")
+if ssh_path_prefix:
+    ssh_path_prefix = ssh_path_prefix.strip()
+    if ssh_path_prefix and not ssh_path_prefix.startswith("/"):
+        ssh_path_prefix = f"/{ssh_path_prefix}"
+    repo_path_for_ssh = f"{ssh_path_prefix}/{repo_path.lstrip('/')}"
+    logger.info("Applying SSH path prefix",
+               original_path=repo_path,
+               prefix=ssh_path_prefix,
+               final_path=repo_path_for_ssh)
+```
+
+**Example Use Case:**
+- Synology NAS with `/volume1` prefix
+- Custom chroot environments
+- Restricted SSH shells
+
+## Repository Statistics
+
+Borg UI automatically tracks repository metrics:
+
+```python
+# From repositories.py:165-283
+async def update_repository_stats(repository: Repository, db: Session) -> bool:
+    """Update archive count and repository size stats by querying Borg"""
+    
+    # Get archive list and count
+    list_result = await borg.list_archives(
+        repository.path,
+        remote_path=repository.remote_path,
+        passphrase=repository.passphrase,
+        bypass_lock=use_bypass_lock
+    )
+    
+    # Update repository size from borg info
+    info_data = json.loads(stdout.decode())
+    cache = info_data.get("cache", {}).get("stats", {})
+    unique_csize = cache.get("unique_csize", 0)
+```
+
+**Tracked Metrics:**
+- Archive count
+- Total repository size
+- Last backup timestamp
+- Compression effectiveness
+- Deduplication ratio
+
+## Lock Configuration
+
+Borg UI configures repository locks to prevent conflicts:
+
+```python
+# From repositories.py:94-119
+def setup_borg_env(base_env=None, passphrase=None, ssh_opts=None):
+    """Setup Borg environment variables with lock and timeout configuration"""
+    
+    # Configure lock behavior to prevent timeout issues
+    env["BORG_LOCK_WAIT"] = "180"  # Wait up to 3 minutes for locks
+    env["BORG_HOSTNAME_IS_UNIQUE"] = "yes"  # Mark hostname as unique
+    env["BORG_RELOCATED_REPO_ACCESS_IS_OK"] = "yes"  # Allow relocated repos
+```
+
+<Card title="Best Practices" icon="lightbulb">
+  - **Encryption**: Always use encryption for sensitive data
+  - **Passphrases**: Use strong, unique passphrases (20+ characters)
+  - **Keyfile Backup**: Store keyfile backups in a secure location
+  - **Test Restores**: Regularly verify backups are recoverable
+  - **Remote Backups**: Use SSH for off-site disaster recovery
+  - **Compression**: Start with lz4, adjust based on storage needs
+</Card>
+
+## API Reference
+
+### Create Repository
+
+```bash
+POST /api/repositories/
+```
+
+**Request Body:**
+```json
+{
+  "name": "Production Backups",
+  "path": "/local/backups/prod",
+  "encryption": "repokey-blake2",
+  "compression": "zstd",
+  "passphrase": "your-secure-passphrase",
+  "source_directories": ["/local/var/www", "/local/etc"],
+  "exclude_patterns": ["*.log", "*.tmp"],
+  "mode": "full"
+}
+```
+
+### Import Repository
+
+```bash
+POST /api/repositories/import
+```
+
+**Request Body:**
+```json
+{
+  "name": "Imported Repo",
+  "path": "/local/backups/existing",
+  "passphrase": "existing-passphrase",
+  "compression": "lz4",
+  "mode": "observe",
+  "bypass_lock": true
+}
+```
+
+### Upload Keyfile
+
+```bash
+POST /api/repositories/{repo_id}/keyfile
+```
+
+**Multipart Form Data:**
+```
+keyfile: <binary file>
+```

@@ -1,0 +1,508 @@
+---
+title: 'Unraid Deployment'
+description: 'Deploy Borg UI on Unraid server'
+icon: 'server'
+---
+
+## Overview
+
+Borg UI can be easily deployed on Unraid servers using either the Community Applications (CA) plugin or manual Docker setup.
+
+## Method 1: Community Applications (Recommended)
+
+<Steps>
+
+<Step title="Install Community Applications">
+If not already installed:
+
+1. Go to **Plugins** tab
+2. Click **Install Plugin**
+3. Search for "Community Applications"
+4. Install the plugin
+</Step>
+
+<Step title="Search for Borg UI">
+1. Click the **Apps** tab
+2. Search for "Borg UI" or "borg-web-ui"
+3. Click on the Borg UI application
+</Step>
+
+<Step title="Configure the container">
+Review and adjust the default settings if needed. See [Configuration](#configuration) section below.
+</Step>
+
+<Step title="Install and start">
+1. Click **Install**
+2. Wait for the container to download and start
+3. Access at `http://your-unraid-ip:8081`
+</Step>
+
+</Steps>
+
+## Method 2: Manual Docker Setup
+
+If Borg UI is not yet available in Community Applications:
+
+<Steps>
+
+<Step title="Go to Docker tab">
+Navigate to **Docker** in the Unraid web interface.
+</Step>
+
+<Step title="Add container">
+1. Click **Add Container**
+2. Set template to **Basic View** or **Advanced View**
+</Step>
+
+<Step title="Configure basic settings">
+```
+Name: borg-web-ui
+Repository: ainullcode/borg-ui:latest
+Network Type: Bridge
+Privileged: On (required only for remote-to-remote backups via SSHFS)
+```
+</Step>
+
+<Step title="Configure port mapping">
+```
+Port 8081:
+  Container Port: 8081
+  Host Port: 8081
+  Connection Type: TCP
+```
+</Step>
+
+<Step title="Add path mappings">
+Click **Add another Path, Port, Variable, Label or Device**
+
+```
+Application Data:
+  Container Path: /data
+  Host Path: /mnt/user/appdata/borg-ui
+  Access Mode: Read/Write
+
+Borg Cache:
+  Container Path: /home/borg/.cache/borg
+  Host Path: /mnt/user/appdata/borg-ui/cache
+  Access Mode: Read/Write
+
+Local Storage:
+  Container Path: /local
+  Host Path: /mnt/user
+  Access Mode: Read/Write
+```
+
+<Info>
+Adjust the Host Path for Local Storage based on what directories you want to backup. Common options:
+- `/mnt/user` - All user shares
+- `/mnt/user/documents` - Specific share
+- `/mnt/disk1` - Specific disk
+</Info>
+</Step>
+
+<Step title="Add environment variables">
+```
+PUID:
+  Key: PUID
+  Value: 99 (default Unraid nobody user)
+
+PGID:
+  Key: PGID
+  Value: 100 (default Unraid users group)
+
+TZ:
+  Key: TZ
+  Value: America/New_York (your timezone)
+
+PORT:
+  Key: PORT
+  Value: 8081
+```
+</Step>
+
+<Step title="Apply and start">
+1. Click **Apply**
+2. Container will download and start automatically
+3. Access at `http://your-unraid-ip:8081`
+</Step>
+
+</Steps>
+
+## Configuration
+
+### Port Mapping
+
+| Container Port | Host Port | Protocol | Description |
+|----------------|-----------|----------|-------------|
+| 8081 | 8081 | TCP | Web interface |
+
+<Info>
+You can change the Host Port to any available port on your Unraid server if 8081 is already in use.
+</Info>
+
+### Path Mappings
+
+#### Application Data
+
+```
+Container Path: /data
+Host Path: /mnt/user/appdata/borg-ui
+Access Mode: Read/Write
+```
+
+Stores database, SSH keys, configuration files, and logs.
+
+#### Borg Cache
+
+```
+Container Path: /home/borg/.cache/borg
+Host Path: /mnt/user/appdata/borg-ui/cache
+Access Mode: Read/Write
+```
+
+Improves backup performance by caching repository metadata.
+
+#### Backup Sources
+
+<CodeGroup>
+
+```text All user shares
+Container Path: /local
+Host Path: /mnt/user
+Access Mode: Read/Write
+```
+
+```text Specific share
+Container Path: /documents
+Host Path: /mnt/user/documents
+Access Mode: Read/Write
+```
+
+```text Multiple shares
+# First share
+Container Path: /documents
+Host Path: /mnt/user/documents
+Access Mode: Read/Write
+
+# Second share
+Container Path: /media
+Host Path: /mnt/user/media
+Access Mode: Read/Write
+
+# Add LOCAL_MOUNT_POINTS variable:
+Key: LOCAL_MOUNT_POINTS
+Value: /documents,/media
+```
+
+```text Specific disk
+Container Path: /disk1
+Host Path: /mnt/disk1
+Access Mode: Read/Write
+```
+
+</CodeGroup>
+
+<Warning>
+Use Read/Write access mode only for directories you want to backup or restore to. Use Read Only for source-only directories.
+</Warning>
+
+### Environment Variables
+
+#### Required
+
+| Variable | Value | Description |
+|----------|-------|-------------|
+| `PUID` | `99` | User ID (99 = nobody on Unraid) |
+| `PGID` | `100` | Group ID (100 = users on Unraid) |
+| `TZ` | `America/New_York` | Your timezone |
+
+<Info>
+To find your timezone: [List of tz database time zones](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
+</Info>
+
+#### Optional
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8081` | Web interface port |
+| `LOG_LEVEL` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR) |
+| `INITIAL_ADMIN_PASSWORD` | `admin123` | Initial admin password |
+| `ENVIRONMENT` | `production` | Application environment |
+| `LOCAL_MOUNT_POINTS` | `/local` | Comma-separated list of mount points |
+
+#### Borg Timeouts (for large repositories)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BORG_INFO_TIMEOUT` | `600` | borg info operations (seconds) |
+| `BORG_LIST_TIMEOUT` | `600` | borg list operations (seconds) |
+| `BORG_INIT_TIMEOUT` | `300` | borg init operations (seconds) |
+| `BORG_EXTRACT_TIMEOUT` | `3600` | borg extract operations (seconds) |
+| `SCRIPT_TIMEOUT` | `120` | Pre/post backup scripts (seconds) |
+
+### Docker Socket (Optional)
+
+To enable stopping/starting other Docker containers during backups:
+
+```
+Container Path: /var/run/docker.sock
+Host Path: /var/run/docker.sock
+Access Mode: Read/Write
+```
+
+<Warning>
+This gives the container access to the Docker daemon. Only enable if you need to manage other containers during backups.
+</Warning>
+
+## Adding Redis for Faster Archive Browsing
+
+For 600x faster archive browsing, add a Redis container:
+
+<Steps>
+
+<Step title="Add Redis container">
+1. Go to **Docker** tab
+2. Click **Add Container**
+3. Configure:
+   ```
+   Name: borg-redis
+   Repository: redis:7-alpine
+   Network Type: Bridge
+   ```
+</Step>
+
+<Step title="Add port mapping">
+```
+Port 6379:
+  Container Port: 6379
+  Host Port: 6379
+  Connection Type: TCP
+```
+</Step>
+
+<Step title="Add custom arguments">
+In **Extra Parameters** field:
+```
+--maxmemory 2gb --maxmemory-policy allkeys-lru --save "" --appendonly no
+```
+</Step>
+
+<Step title="Apply and start Redis">
+Click **Apply** and start the Redis container.
+</Step>
+
+<Step title="Update Borg UI container">
+Add these environment variables to the Borg UI container:
+
+```
+REDIS_HOST:
+  Key: REDIS_HOST
+  Value: [Unraid IP address]
+
+REDIS_PORT:
+  Key: REDIS_PORT
+  Value: 6379
+
+REDIS_DB:
+  Key: REDIS_DB
+  Value: 0
+
+CACHE_TTL_SECONDS:
+  Key: CACHE_TTL_SECONDS
+  Value: 7200
+
+CACHE_MAX_SIZE_MB:
+  Key: CACHE_MAX_SIZE_MB
+  Value: 2048
+```
+</Step>
+
+<Step title="Restart Borg UI">
+Restart the borg-web-ui container to apply changes.
+</Step>
+
+</Steps>
+
+## Unraid-Specific Features
+
+### Backing Up Array Data
+
+Borg UI can backup your Unraid array data:
+
+1. Mount user shares: `/mnt/user` → `/local`
+2. Create repository pointing to local path or remote SSH server
+3. Configure source directories:
+   - `/local/appdata` - Docker persistent data
+   - `/local/documents` - User files
+   - `/local/media` - Media files
+
+### Backing Up Specific Disks
+
+To backup individual disks:
+
+1. Add path mapping for each disk:
+   ```
+   Container Path: /disk1
+   Host Path: /mnt/disk1
+   ```
+
+2. Create repository with source: `/disk1`
+
+### VM/Docker Integration
+
+Stop containers/VMs before backup using pre-backup scripts:
+
+1. Mount Docker socket (see [Docker Socket](#docker-socket-optional))
+2. Create pre-backup script:
+   ```bash
+   #!/bin/bash
+   docker stop plex
+   docker stop nextcloud
+   ```
+
+3. Create post-backup script:
+   ```bash
+   #!/bin/bash
+   docker start plex
+   docker start nextcloud
+   ```
+
+## Accessing the Interface
+
+### Local Access
+
+```
+http://your-unraid-ip:8081
+```
+
+Default credentials:
+- Username: `admin`
+- Password: `admin123`
+
+<Warning>
+Change the admin password immediately after first login.
+</Warning>
+
+### Via Unraid WebUI
+
+The container icon in the Docker tab will link directly to the web interface.
+
+### Reverse Proxy via Nginx Proxy Manager
+
+Many Unraid users run Nginx Proxy Manager. See the [Reverse Proxy guide](/deployment/reverse-proxy) for configuration.
+
+## Managing the Container
+
+### View Logs
+
+1. Go to **Docker** tab
+2. Click on **borg-web-ui** container
+3. Select **Logs**
+
+### Update Container
+
+<Steps>
+
+<Step title="Stop container">
+Click the container icon and select **Stop**.
+</Step>
+
+<Step title="Remove container">
+Click **Remove** (your data is safe in `/mnt/user/appdata/borg-ui`).
+</Step>
+
+<Step title="Reinstall">
+If using CA, reinstall from Apps tab. Otherwise, create the container again with the same settings. It will pull the latest image.
+</Step>
+
+</Steps>
+
+### Auto-Update
+
+Consider using the **Docker Auto Update** plugin:
+
+1. Install from CA: "Docker Auto Update"
+2. Configure to auto-update borg-web-ui
+3. Set update schedule (e.g., weekly)
+
+## Backup Best Practices
+
+### What to Backup
+
+<Accordion title="Critical data">
+- `/mnt/user/appdata` - Docker configurations
+- User share data (documents, photos, etc.)
+- VM images (if not too large)
+</Accordion>
+
+<Accordion title="What NOT to backup">
+- `/mnt/cache` - Temporary files
+- Downloaded media being processed
+- System files (Unraid itself)
+</Accordion>
+
+### Remote Backup Targets
+
+Recommended remote backup destinations:
+
+1. **Another local server** via SSH
+2. **Cloud storage** - Hetzner Storage Box, BorgBase
+3. **External drive** mounted via Unassigned Devices plugin
+
+### Scheduling
+
+Recommended schedule:
+
+- **AppData**: Daily at 2 AM
+- **User files**: Daily at 3 AM  
+- **Media**: Weekly on Sunday at 4 AM
+
+## Troubleshooting
+
+### Container won't start
+
+1. Check logs in Docker tab
+2. Verify port 8081 is not in use:
+   ```bash
+   netstat -tulpn | grep 8081
+   ```
+3. Try different host port
+
+### Permission errors
+
+1. Verify PUID=99 and PGID=100
+2. Check ownership of appdata:
+   ```bash
+   ls -la /mnt/user/appdata/borg-ui
+   ```
+3. Fix if needed:
+   ```bash
+   chown -R 99:100 /mnt/user/appdata/borg-ui
+   ```
+
+### Cannot access files
+
+1. Verify path mappings are correct
+2. Check host path exists:
+   ```bash
+   ls -la /mnt/user
+   ```
+3. Ensure Access Mode is Read/Write
+
+### Backups failing
+
+1. Check repository is accessible
+2. Verify source paths are mounted correctly
+3. Check available disk space
+4. Review logs in Borg UI interface
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Reverse Proxy" icon="network-wired" href="/deployment/reverse-proxy">
+    Set up SSL with Nginx Proxy Manager
+  </Card>
+  <Card title="Docker Compose" icon="layer-group" href="/deployment/docker-compose">
+    Alternative deployment method
+  </Card>
+</CardGroup>

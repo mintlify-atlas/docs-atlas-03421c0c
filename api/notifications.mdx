@@ -1,0 +1,284 @@
+---
+title: 'Notifications'
+description: 'Configure notification settings for backup events'
+---
+
+## Overview
+
+Notification endpoints allow you to configure alerts for backup, restore, and check operations using Apprise service URLs.
+
+## List Notification Settings
+
+Get all configured notification settings.
+
+**Endpoint:** `GET /api/notifications`
+
+**Example Request:**
+```bash
+curl http://localhost:5000/api/notifications \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:**
+```json
+[
+  {
+    "id": 1,
+    "name": "Slack Alerts",
+    "service_url": "slack://token/channel",
+    "enabled": true,
+    "title_prefix": "[Production]",
+    "include_job_name_in_title": true,
+    "notify_on_backup_start": false,
+    "notify_on_backup_success": false,
+    "notify_on_backup_failure": true,
+    "notify_on_restore_success": false,
+    "notify_on_restore_failure": true,
+    "notify_on_check_success": false,
+    "notify_on_check_failure": true,
+    "notify_on_schedule_failure": true,
+    "monitor_all_repositories": true,
+    "repositories": [],
+    "created_at": "2024-01-01T00:00:00Z",
+    "updated_at": "2024-01-15T10:00:00Z",
+    "last_used_at": "2024-01-15T10:30:00Z"
+  }
+]
+```
+
+<ResponseField name="service_url" type="string">
+  Apprise service URL (e.g., `slack://token/channel`, `discord://webhook_id/token`, `json://webhook_url`)
+</ResponseField>
+
+<ResponseField name="title_prefix" type="string">
+  Optional prefix for notification titles (e.g., `[Production]`)
+</ResponseField>
+
+<ResponseField name="include_job_name_in_title" type="boolean">
+  Include job/schedule name in notification title
+</ResponseField>
+
+<ResponseField name="monitor_all_repositories" type="boolean">
+  If true, applies to all repositories. If false, only monitors specific repositories
+</ResponseField>
+
+## Get Notification Setting
+
+Get details for a specific notification configuration.
+
+**Endpoint:** `GET /api/notifications/{setting_id}`
+
+**Example Request:**
+```bash
+curl http://localhost:5000/api/notifications/1 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+## Create Notification Setting
+
+Create a new notification configuration.
+
+**Endpoint:** `POST /api/notifications`
+
+<ParamField body="name" type="string" required>
+  User-friendly name for this notification setting
+</ParamField>
+
+<ParamField body="service_url" type="string" required>
+  Apprise service URL. Examples:
+  - Slack: `slack://token/channel`
+  - Discord: `discord://webhook_id/token`
+  - Email: `mailto://user:password@domain.com`
+  - JSON Webhook: `json://webhook_url` or `jsons://webhook_url` (HTTPS)
+  - See [Apprise documentation](https://github.com/caronc/apprise) for more
+</ParamField>
+
+<ParamField body="enabled" type="boolean" default={true}>
+  Whether this notification is enabled
+</ParamField>
+
+<ParamField body="title_prefix" type="string">
+  Optional prefix for notification titles
+</ParamField>
+
+<ParamField body="include_job_name_in_title" type="boolean" default={false}>
+  Include job/schedule name in notification title
+</ParamField>
+
+<ParamField body="notify_on_backup_start" type="boolean" default={false}>
+  Send notification when backup starts
+</ParamField>
+
+<ParamField body="notify_on_backup_success" type="boolean" default={false}>
+  Send notification when backup succeeds
+</ParamField>
+
+<ParamField body="notify_on_backup_failure" type="boolean" default={true}>
+  Send notification when backup fails
+</ParamField>
+
+<ParamField body="notify_on_restore_success" type="boolean" default={false}>
+  Send notification when restore succeeds
+</ParamField>
+
+<ParamField body="notify_on_restore_failure" type="boolean" default={true}>
+  Send notification when restore fails
+</ParamField>
+
+<ParamField body="notify_on_check_success" type="boolean" default={false}>
+  Send notification when repository check succeeds
+</ParamField>
+
+<ParamField body="notify_on_check_failure" type="boolean" default={true}>
+  Send notification when repository check fails
+</ParamField>
+
+<ParamField body="notify_on_schedule_failure" type="boolean" default={true}>
+  Send notification when scheduled job fails
+</ParamField>
+
+<ParamField body="monitor_all_repositories" type="boolean" default={true}>
+  Apply to all repositories. If false, specify repository_ids
+</ParamField>
+
+<ParamField body="repository_ids" type="array">
+  List of repository IDs to monitor (only used if monitor_all_repositories is false)
+</ParamField>
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/notifications \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Slack Alerts",
+    "service_url": "slack://xoxb-token/C1234567890",
+    "enabled": true,
+    "title_prefix": "[Production]",
+    "notify_on_backup_failure": true,
+    "notify_on_restore_failure": true,
+    "monitor_all_repositories": true
+  }'
+```
+
+**Response:**
+```json
+{
+  "id": 1,
+  "name": "Slack Alerts",
+  "service_url": "slack://xoxb-token/C1234567890",
+  "enabled": true,
+  "title_prefix": "[Production]",
+  "include_job_name_in_title": false,
+  "notify_on_backup_start": false,
+  "notify_on_backup_success": false,
+  "notify_on_backup_failure": true,
+  "notify_on_restore_success": false,
+  "notify_on_restore_failure": true,
+  "notify_on_check_success": false,
+  "notify_on_check_failure": true,
+  "notify_on_schedule_failure": true,
+  "monitor_all_repositories": true,
+  "repositories": [],
+  "created_at": "2024-01-15T11:00:00Z",
+  "updated_at": "2024-01-15T11:00:00Z",
+  "last_used_at": null
+}
+```
+
+## Update Notification Setting
+
+Update an existing notification configuration.
+
+**Endpoint:** `PUT /api/notifications/{setting_id}`
+
+**Example Request:**
+```bash
+curl -X PUT http://localhost:5000/api/notifications/1 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "enabled": false
+  }'
+```
+
+## Delete Notification Setting
+
+Delete a notification configuration.
+
+**Endpoint:** `DELETE /api/notifications/{setting_id}`
+
+**Example Request:**
+```bash
+curl -X DELETE http://localhost:5000/api/notifications/1 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:** `204 No Content`
+
+## Test Notification
+
+Test a notification service URL before saving.
+
+**Endpoint:** `POST /api/notifications/test`
+
+<ParamField body="service_url" type="string" required>
+  Apprise service URL to test
+</ParamField>
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/notifications/test \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "service_url": "slack://xoxb-token/C1234567890"
+  }'
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Test notification sent successfully"
+}
+```
+
+## Supported Services
+
+Borg UI uses Apprise for notifications, supporting 80+ services:
+
+- **Chat**: Slack, Discord, Telegram, Microsoft Teams, Mattermost
+- **Email**: SMTP, Gmail, Outlook
+- **SMS**: Twilio, AWS SNS, Nexmo
+- **Webhooks**: JSON, XML, custom HTTP
+- **Push**: Pushover, Pushbullet, Notify, Apprise
+
+See the [Apprise documentation](https://github.com/caronc/apprise) for complete service URL formats.
+
+## Example Service URLs
+
+### Slack
+```
+slack://xoxb-1234-1234-4ddbc191d40ee098cbaae6f3523ada2d/#general
+```
+
+### Discord
+```
+discord://webhook_id/webhook_token
+```
+
+### Email (Gmail)
+```
+mailto://user:password@gmail.com?to=recipient@example.com
+```
+
+### JSON Webhook
+```
+json://webhook.example.com/endpoint
+```
+
+### HTTPS JSON Webhook
+```
+jsons://webhook.example.com/endpoint
+```

@@ -1,0 +1,281 @@
+---
+title: 'Backups'
+description: 'Create and monitor backup operations'
+---
+
+## Overview
+
+Backup endpoints allow you to start manual backups, monitor progress, view job history, and cancel running operations.
+
+## Start Backup
+
+Start a manual backup operation.
+
+**Endpoint:** `POST /api/backup/start`
+
+<ParamField body="repository" type="string" required>
+  Repository path to back up
+</ParamField>
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/backup/start \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repository": "/local/backups/my-repo"
+  }'
+```
+
+**Response:**
+```json
+{
+  "job_id": 123,
+  "status": "pending",
+  "message": "Backup job started"
+}
+```
+
+<ResponseField name="job_id" type="integer">
+  ID of the created backup job
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Initial job status: `pending`
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Human-readable message
+</ResponseField>
+
+## Get All Backup Jobs
+
+Retrieve backup job history with progress details.
+
+**Endpoint:** `GET /api/backup/jobs`
+
+<ParamField query="limit" type="integer" default={200}>
+  Maximum number of jobs to return
+</ParamField>
+
+<ParamField query="scheduled_only" type="boolean" default={false}>
+  Only return jobs triggered by scheduled tasks
+</ParamField>
+
+<ParamField query="manual_only" type="boolean" default={false}>
+  Only return manual backup jobs
+</ParamField>
+
+**Example Request:**
+```bash
+curl "http://localhost:5000/api/backup/jobs?limit=50" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "jobs": [
+    {
+      "id": 123,
+      "repository": "/local/backups/my-repo",
+      "status": "completed",
+      "started_at": "2024-01-15T10:00:00Z",
+      "completed_at": "2024-01-15T10:15:30Z",
+      "progress": 100,
+      "error_message": null,
+      "has_logs": false,
+      "maintenance_status": null,
+      "scheduled_job_id": null,
+      "progress_details": {
+        "original_size": 10737418240,
+        "compressed_size": 8589934592,
+        "deduplicated_size": 2147483648,
+        "nfiles": 15420,
+        "current_file": "",
+        "progress_percent": 100,
+        "backup_speed": 125.5,
+        "total_expected_size": 10737418240,
+        "estimated_time_remaining": 0
+      }
+    }
+  ]
+}
+```
+
+<ResponseField name="jobs" type="array">
+  Array of backup job objects
+</ResponseField>
+
+<ResponseField name="jobs[].status" type="string">
+  Job status: `pending`, `running`, `completed`, `completed_with_warnings`, `failed`, or `cancelled`
+</ResponseField>
+
+<ResponseField name="jobs[].progress_details.original_size" type="integer">
+  Original size in bytes before compression
+</ResponseField>
+
+<ResponseField name="jobs[].progress_details.compressed_size" type="integer">
+  Compressed size in bytes
+</ResponseField>
+
+<ResponseField name="jobs[].progress_details.deduplicated_size" type="integer">
+  Deduplicated size in bytes (actual storage used)
+</ResponseField>
+
+<ResponseField name="jobs[].progress_details.nfiles" type="integer">
+  Number of files processed
+</ResponseField>
+
+<ResponseField name="jobs[].progress_details.backup_speed" type="number">
+  Backup speed in MB/s
+</ResponseField>
+
+## Get Backup Status
+
+Get detailed status for a specific backup job.
+
+**Endpoint:** `GET /api/backup/status/{job_id}`
+
+**Example Request:**
+```bash
+curl http://localhost:5000/api/backup/status/123 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "id": 123,
+  "repository": "/local/backups/my-repo",
+  "status": "running",
+  "started_at": "2024-01-15T10:00:00Z",
+  "completed_at": null,
+  "progress": 65,
+  "error_message": null,
+  "logs": null,
+  "maintenance_status": null,
+  "progress_details": {
+    "original_size": 7000000000,
+    "compressed_size": 5600000000,
+    "deduplicated_size": 1400000000,
+    "nfiles": 10023,
+    "current_file": "/data/documents/report.pdf",
+    "progress_percent": 65,
+    "backup_speed": 125.5,
+    "total_expected_size": 10737418240,
+    "estimated_time_remaining": 180
+  }
+}
+```
+
+## Cancel Backup
+
+Cancel a running backup job.
+
+**Endpoint:** `POST /api/backup/cancel/{job_id}`
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/backup/cancel/123 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "message": "Backup cancelled successfully",
+  "process_terminated": true
+}
+```
+
+<ResponseField name="process_terminated" type="boolean">
+  Whether the backup process was successfully terminated
+</ResponseField>
+
+## Stream Backup Logs
+
+Get incremental logs for real-time streaming (for failed/cancelled backups only).
+
+**Endpoint:** `GET /api/backup/logs/{job_id}/stream`
+
+<ParamField query="offset" type="integer" default={0}>
+  Line number to start from for incremental updates
+</ParamField>
+
+**Example Request:**
+```bash
+curl "http://localhost:5000/api/backup/logs/123/stream?offset=0" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "job_id": 123,
+  "status": "failed",
+  "lines": [
+    {
+      "line_number": 1,
+      "content": "Starting backup operation..."
+    },
+    {
+      "line_number": 2,
+      "content": "Error: Repository locked by another process"
+    }
+  ],
+  "total_lines": 2,
+  "has_more": false
+}
+```
+
+## Download Backup Logs
+
+Download complete logs as a text file (for failed/cancelled backups only).
+
+**Endpoint:** `GET /api/backup/logs/{job_id}/download`
+
+<ParamField query="token" type="string" required>
+  Access token (passed as query parameter for download links)
+</ParamField>
+
+**Example Request:**
+```bash
+curl "http://localhost:5000/api/backup/logs/123/download?token=YOUR_ACCESS_TOKEN" \
+  -o backup_logs.txt
+```
+
+**Response:** Plain text file with complete backup logs
+
+## Progress Tracking
+
+Backup progress is tracked in real-time with the following metrics:
+
+- **Progress Percent**: Overall completion percentage (0-100)
+- **Original Size**: Total size of data being backed up
+- **Compressed Size**: Size after compression
+- **Deduplicated Size**: Actual storage used after deduplication
+- **Files Processed**: Number of files backed up
+- **Current File**: File currently being processed
+- **Backup Speed**: Current throughput in MB/s
+- **Estimated Time Remaining**: Seconds until completion
+
+## Status Values
+
+Backup jobs can have the following statuses:
+
+- `pending` - Job created, waiting to start
+- `running` - Backup in progress
+- `completed` - Backup completed successfully
+- `completed_with_warnings` - Backup completed but with warnings
+- `failed` - Backup failed with errors
+- `cancelled` - Backup was cancelled by user
+
+## Maintenance Operations
+
+Backups can include automatic maintenance:
+
+- **Prune**: Remove old archives based on retention policy
+- **Compact**: Free up space by compacting repository segments
+
+Maintenance status is tracked in the `maintenance_status` field.

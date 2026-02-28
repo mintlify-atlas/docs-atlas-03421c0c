@@ -1,0 +1,570 @@
+---
+title: SSH Key Management
+description: Configure SSH keys for secure remote repository access
+---
+
+# SSH Key Management
+
+Borg UI provides a centralized system for managing SSH keys to access remote repositories securely. This eliminates the need to manually configure SSH keys on the host.
+
+## Overview
+
+<Info>
+  Borg UI uses a **single system SSH key** for all remote connections. This simplifies management and ensures consistent authentication across all SSH repositories.
+</Info>
+
+### Key Features
+
+- **Centralized Management**: One system key for all SSH connections
+- **Encrypted Storage**: Private keys encrypted in database using `SECRET_KEY`
+- **Automatic Deployment**: Keys deployed to filesystem (`/home/borg/.ssh`) on startup
+- **Multiple Key Types**: RSA, ED25519, ECDSA support
+- **Connection Testing**: Verify SSH connectivity before use
+- **Storage Monitoring**: Track remote storage usage via SSH
+
+### How It Works
+
+1. **Generate or Import**: Create a new key or import existing one
+2. **Deploy to Servers**: Use Quick Setup or manual deployment
+3. **Automatic Use**: Borg automatically uses the system key for SSH operations
+4. **Persistent Storage**: Keys survive container restarts
+
+## Quick Setup
+
+<Steps>
+  <Step title="Navigate to SSH Keys">
+    Go to **Settings → SSH Keys** in the Borg UI.
+  </Step>
+  
+  <Step title="Generate System Key">
+    Click **Quick Setup** and choose:
+    - **Name**: Descriptive name (e.g., "Borg System Key")
+    - **Key Type**: `ed25519` (recommended) or `rsa`
+    - **Description**: Optional notes
+  </Step>
+  
+  <Step title="Deploy to Remote Server">
+    Enter remote server credentials:
+    - **Host**: Remote server hostname/IP
+    - **Username**: SSH username
+    - **Port**: SSH port (default: 22)
+    - **Password**: One-time password for deployment
+    - **Use SFTP Mode**: Enable for Hetzner, disable for Synology
+    
+    Click **Deploy** to automatically copy the public key.
+  </Step>
+  
+  <Step title="Test Connection">
+    Click **Test Connection** to verify SSH access works.
+  </Step>
+</Steps>
+
+<Note>
+  The password is only used once to deploy the public key. After deployment, all authentication uses the SSH key.
+</Note>
+
+## Generating SSH Keys
+
+### Generate New Key
+
+```http
+POST /api/ssh-keys/generate
+```
+
+<CodeGroup>
+
+```json ED25519 (Recommended)
+{
+  "name": "Borg System Key",
+  "key_type": "ed25519",
+  "description": "System SSH key for all remote connections"
+}
+```
+
+```json RSA
+{
+  "name": "Borg System Key",
+  "key_type": "rsa",
+  "description": "RSA 4096-bit key"
+}
+```
+
+```json ECDSA
+{
+  "name": "Borg System Key",
+  "key_type": "ecdsa",
+  "description": "ECDSA key"
+}
+```
+
+</CodeGroup>
+
+**Key Type Comparison:**
+
+| Type | Security | Speed | Compatibility | Recommended |
+|------|----------|-------|---------------|-------------|
+| ED25519 | Excellent | Fastest | Modern systems | ✅ Yes |
+| RSA | Good | Slower | Universal | Legacy only |
+| ECDSA | Good | Fast | Most systems | Alternative |
+
+<Warning>
+  Only one system key can exist at a time. Delete the existing key first to generate a new one.
+</Warning>
+
+### Response
+
+```json
+{
+  "success": true,
+  "message": "System SSH key generated successfully",
+  "ssh_key": {
+    "id": 1,
+    "name": "Borg System Key",
+    "key_type": "ed25519",
+    "public_key": "ssh-ed25519 AAAAC3Nz...",
+    "fingerprint": "SHA256:abc123...",
+    "is_system_key": true,
+    "is_active": true
+  }
+}
+```
+
+## Importing Existing Keys
+
+### Import from Filesystem
+
+```http
+POST /api/ssh-keys/import
+```
+
+```json Request
+{
+  "name": "Imported Key",
+  "private_key_path": "/local/home/user/.ssh/id_ed25519",
+  "public_key_path": "/local/home/user/.ssh/id_ed25519.pub",
+  "description": "Imported from host system"
+}
+```
+
+<Note>
+  If `public_key_path` is omitted, Borg UI looks for `{private_key_path}.pub`
+</Note>
+
+**Supported Key Formats:**
+- OpenSSH format (modern, recommended)
+- PEM format (legacy)
+
+**Key Detection:**
+The key type (RSA, ED25519, ECDSA) is automatically detected from the public key.
+
+## Deploying Keys to Remote Servers
+
+### Quick Setup (Recommended)
+
+```http
+POST /api/ssh-keys/quick-setup
+```
+
+```json Request
+{
+  "name": "Borg System Key",
+  "key_type": "ed25519",
+  "host": "backup.example.com",
+  "username": "borg",
+  "port": 22,
+  "password": "temporary-password",
+  "use_sftp_mode": true
+}
+```
+
+**This performs three actions:**
+1. Generates a new SSH key
+2. Deploys it to the remote server using `ssh-copy-id`
+3. Creates and tests the SSH connection
+
+### Manual Deployment
+
+If you already have a key and want to deploy it:
+
+```http
+POST /api/ssh-keys/{key_id}/deploy
+```
+
+```json Request
+{
+  "host": "backup.example.com",
+  "username": "borg",
+  "port": 22,
+  "password": "temporary-password",
+  "default_path": "/backup",
+  "mount_point": "/remote/backup",
+  "use_sftp_mode": true
+}
+```
+
+<ParamField path="use_sftp_mode" type="boolean" default="true">
+  **SFTP Mode Compatibility:**
+  - `true`: Hetzner Storage Box, most modern servers
+  - `false`: Synology NAS, older SSH servers
+  
+  Determines whether to use SFTP (`-s` flag) for `ssh-copy-id`.
+</ParamField>
+
+<ParamField path="default_path" type="string" default="/">
+  Default starting directory for SSH file browsing.
+  
+  **Examples:**
+  - Hetzner: `/` (root of storage box)
+  - Synology: `/volume1/backup`
+  - Generic: `/home/username/backup`
+</ParamField>
+
+<ParamField path="ssh_path_prefix" type="string" default="none">
+  Path prefix prepended to SSH commands (not SFTP).
+  
+  **Use case:** Synology NAS requires `/volume1` prefix for SSH but not SFTP.
+  
+  ```json
+  {
+    "ssh_path_prefix": "/volume1",
+    "default_path": "/volume1/backup"
+  }
+  ```
+</ParamField>
+
+<ParamField path="mount_point" type="string" default="none">
+  Logical mount point name for UI display.
+  
+  **Examples:**
+  - `/hetzner`
+  - `/synology`
+  - `/backup-server`
+</ParamField>
+
+### Redeploying Keys
+
+If you need to redeploy the system key to an existing connection:
+
+```http
+POST /api/ssh-keys/connections/{connection_id}/redeploy
+```
+
+```json Request
+{
+  "password": "temporary-password"
+}
+```
+
+**Use cases:**
+- Server was rebuilt and lost authorized_keys
+- Generated a new system key
+- Public key was removed from server
+
+## Managing SSH Connections
+
+### List Connections
+
+```http
+GET /api/ssh-keys/connections
+```
+
+```json Response
+{
+  "success": true,
+  "connections": [
+    {
+      "id": 1,
+      "ssh_key_id": 1,
+      "ssh_key_name": "Borg System Key",
+      "host": "backup.example.com",
+      "username": "borg",
+      "port": 22,
+      "use_sftp_mode": true,
+      "default_path": "/backup",
+      "mount_point": "/hetzner",
+      "status": "connected",
+      "last_test": "2026-02-28T10:30:00Z",
+      "last_success": "2026-02-28T10:30:00Z",
+      "storage": {
+        "total": 1099511627776,
+        "total_formatted": "1.00 TB",
+        "used": 549755813888,
+        "used_formatted": "512.00 GB",
+        "available": 549755813888,
+        "available_formatted": "512.00 GB",
+        "percent_used": 50.0,
+        "last_check": "2026-02-28T10:25:00Z"
+      }
+    }
+  ]
+}
+```
+
+### Test Connection
+
+```http
+POST /api/ssh-keys/connections/{connection_id}/test
+```
+
+**Verifies:**
+- SSH connection succeeds
+- Authentication works
+- Server is reachable
+
+```json Response
+{
+  "success": true,
+  "message": "Connection tested successfully",
+  "status": "connected"
+}
+```
+
+### Refresh Storage Information
+
+```http
+POST /api/ssh-keys/connections/{connection_id}/refresh-storage
+```
+
+Runs `df -k` on the remote server to collect storage statistics.
+
+```json Response
+{
+  "success": true,
+  "message": "Storage information refreshed successfully",
+  "storage": {
+    "total": 1099511627776,
+    "total_formatted": "1.00 TB",
+    "used": 549755813888,
+    "used_formatted": "512.00 GB",
+    "available": 549755813888,
+    "available_formatted": "512.00 GB",
+    "percent_used": 50.0,
+    "last_check": "2026-02-28T10:35:00Z"
+  }
+}
+```
+
+### Update Connection
+
+```http
+PUT /api/ssh-keys/connections/{connection_id}
+```
+
+```json Request
+{
+  "default_path": "/new-backup-location",
+  "mount_point": "/new-mount",
+  "use_sftp_mode": false
+}
+```
+
+### Delete Connection
+
+```http
+DELETE /api/ssh-keys/connections/{connection_id}
+```
+
+<Warning>
+  Deleting a connection does NOT remove repositories or data. It only removes the connection record from Borg UI.
+</Warning>
+
+## Key Storage and Security
+
+### Encryption
+
+**Private keys are encrypted** using Fernet symmetric encryption:
+- Encryption key: First 32 bytes of `SECRET_KEY`
+- Algorithm: Fernet (AES-128-CBC + HMAC-SHA256)
+- Storage: Database (`ssh_keys` table)
+
+**Decryption** happens only when:
+- Deploying keys to remote servers
+- Writing keys to `/home/borg/.ssh` on startup
+- Testing SSH connections
+
+### Filesystem Deployment
+
+On container startup, the system SSH key is automatically deployed:
+
+**Location:** `/home/borg/.ssh/`
+
+```bash
+/home/borg/.ssh/
+├── id_ed25519      # Private key (chmod 600)
+└── id_ed25519.pub  # Public key (chmod 644)
+```
+
+**Deployment script:** `/app/app/scripts/deploy_ssh_key.py`
+
+**Process:**
+1. Read encrypted private key from database
+2. Decrypt using `SECRET_KEY`
+3. Write to `/home/borg/.ssh/id_{key_type}`
+4. Set proper permissions (600 for private, 644 for public)
+5. Set ownership to `borg:borg`
+
+### Key Rotation
+
+<Steps>
+  <Step title="Generate New Key">
+    Delete existing system key, then generate a new one.
+  </Step>
+  
+  <Step title="Deploy to All Servers">
+    Use **Redeploy** on each SSH connection to update the authorized_keys.
+  </Step>
+  
+  <Step title="Remove Old Key">
+    Manually remove the old public key from `~/.ssh/authorized_keys` on each server.
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+### Permission Denied
+
+**Symptoms:**
+```
+Permission denied (publickey)
+```
+
+**Solutions:**
+1. Verify key deployed: Check `/home/borg/.ssh/` in container
+2. Test manually:
+   ```bash
+   docker exec -it borg-web-ui bash
+   ssh -i /home/borg/.ssh/id_ed25519 user@host
+   ```
+3. Check remote `~/.ssh/authorized_keys`:
+   ```bash
+   # On remote server
+   cat ~/.ssh/authorized_keys
+   chmod 600 ~/.ssh/authorized_keys
+   chmod 700 ~/.ssh
+   ```
+4. Verify SFTP mode setting matches server capabilities
+
+### Connection Timeout
+
+**Symptoms:**
+```
+Connection timed out
+```
+
+**Solutions:**
+1. Check firewall rules
+2. Verify port (default: 22)
+3. Test connectivity:
+   ```bash
+   docker exec -it borg-web-ui ping backup.example.com
+   docker exec -it borg-web-ui nc -zv backup.example.com 22
+   ```
+
+### Storage Info Unavailable
+
+**Symptoms:**
+Storage information shows as unavailable or null.
+
+**Causes:**
+- Server restricts `df` command
+- Limited shell environment (e.g., Hetzner Storage Box)
+- Path doesn't exist
+
+**Solutions:**
+1. Verify `default_path` exists on server
+2. Test manually:
+   ```bash
+   docker exec -it borg-web-ui ssh user@host df -k /path
+   ```
+3. Check server's SSH restrictions (some providers limit commands)
+
+### Hetzner Storage Box Issues
+
+**Restricted shell environment:**
+- Use `use_sftp_mode: true`
+- Set `default_path: "/"`
+- Storage info may fail due to command restrictions
+
+### Synology NAS Issues
+
+**Path prefix required:**
+```json
+{
+  "default_path": "/volume1/backup",
+  "ssh_path_prefix": "/volume1",
+  "use_sftp_mode": false
+}
+```
+
+**Old SSH version:**
+- Disable SFTP mode: `use_sftp_mode: false`
+- May need to manually copy public key
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use ED25519 Keys">
+    ED25519 keys are faster, more secure, and smaller than RSA keys. Only use RSA for legacy system compatibility.
+  </Accordion>
+  
+  <Accordion title="One System Key">
+    Borg UI enforces a single system key for simplicity. This is sufficient for most use cases and simplifies key rotation.
+  </Accordion>
+  
+  <Accordion title="Backup Your SECRET_KEY">
+    The `SECRET_KEY` encrypts all private keys. Back it up securely:
+    ```bash
+    docker cp borg-web-ui:/data/.secret_key ./secret_key.backup
+    ```
+  </Accordion>
+  
+  <Accordion title="Test Before Production">
+    Always test SSH connections before creating repositories. Use the **Test Connection** button to verify.
+  </Accordion>
+  
+  <Accordion title="Monitor Storage">
+    Regularly refresh storage information to track remote disk usage and prevent out-of-space errors.
+  </Accordion>
+  
+  <Accordion title="Secure Server Access">
+    On remote servers:
+    - Disable password authentication after deploying keys
+    - Use non-standard SSH ports if exposed to internet
+    - Enable fail2ban for brute force protection
+  </Accordion>
+</AccordionGroup>
+
+## API Reference
+
+### Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/ssh-keys/system-key` | Get system SSH key |
+| POST | `/api/ssh-keys/generate` | Generate new system key |
+| POST | `/api/ssh-keys/import` | Import existing key |
+| POST | `/api/ssh-keys/quick-setup` | Generate and deploy key |
+| POST | `/api/ssh-keys/{key_id}/deploy` | Deploy key to server |
+| GET | `/api/ssh-keys/connections` | List all connections |
+| POST | `/api/ssh-keys/connections/{id}/test` | Test connection |
+| POST | `/api/ssh-keys/connections/{id}/refresh-storage` | Refresh storage info |
+| PUT | `/api/ssh-keys/connections/{id}` | Update connection |
+| POST | `/api/ssh-keys/connections/{id}/redeploy` | Redeploy key |
+| DELETE | `/api/ssh-keys/connections/{id}` | Delete connection |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Create SSH Repository" icon="folder" href="/repositories/ssh">
+    Set up a repository on a remote SSH server
+  </Card>
+  <Card title="Environment Variables" icon="gears" href="/configuration/environment-variables">
+    Configure SSH-related environment variables
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/troubleshooting">
+    Resolve common SSH connection issues
+  </Card>
+  <Card title="API Reference" icon="code" href="/api-reference">
+    Complete API documentation
+  </Card>
+</CardGroup>

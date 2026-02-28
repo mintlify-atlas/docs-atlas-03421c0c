@@ -1,0 +1,603 @@
+---
+title: 'Performance Optimization'
+description: 'Redis caching, operation timeouts, memory tuning, and performance best practices'
+---
+
+# Performance Optimization
+
+Optimize Borg UI for large repositories, fast archive browsing, and efficient backups.
+
+---
+
+## Redis Cache Configuration
+
+Redis caching provides **600x faster** archive browsing for large repositories (60-90 seconds → {"<"}100ms).
+
+### Quick Performance Comparison
+
+| Archive Size | Files | Without Cache | With Redis Cache |
+|-------------|-------|---------------|------------------|
+| Small | 1,000 | ~1 second | {"<"}100ms |
+| Medium | 100,000 | ~10 seconds | {"<"}100ms |
+| Large | 1,000,000 | 60-90 seconds | {"<"}100ms |
+| Very Large | 10,000,000 | 10-15 minutes | {"<"}1 second |
+
+### How Caching Works
+
+**Architecture** (from `app/services/cache_service.py`):
+- **Primary backend:** Redis (persistent, distributed)
+- **Fallback backend:** In-memory LRU cache (automatic if Redis unavailable)
+- **Compression:** Automatic for archives {">"}100KB (70-80% size reduction)
+- **Cache key format:** `archive:{repo_id}:{archive_name}`
+
+**Cache flow:**
+1. First browse: Run `borg list`, serialize JSON, compress if {">"}100KB, store in Redis
+2. Subsequent browses: Retrieve from Redis, decompress, deserialize → instant results
+3. Expiration: Entries auto-expire after TTL (default: 2 hours)
+4. Eviction: LRU eviction when cache size limit reached
+
+### Local Redis Setup (Included)
+
+The recommended installation includes Redis with no configuration needed.
+
+**docker-compose.yml (already configured):**
+```yaml
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: borg-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --appendonly no
+    volumes:
+      - redis_data:/data
+
+volumes:
+  redis_data:
+```
+
+**Configuration:**
+- `maxmemory 2gb`: Limit Redis memory usage
+- `allkeys-lru`: Evict least-recently-used keys when memory full
+- `save ""`: Disable RDB snapshots (cache-only, not persistent)
+- `appendonly no`: Disable AOF (faster, cache can be rebuilt)
+
+<Note>
+  Redis is **already configured** in the recommended installation. No setup needed unless you need more than 2GB cache.
+</Note>
+
+### External Redis for Large Repositories
+
+**Use cases:**
+- Repositories with 1M+ files
+- Multiple large archives
+- Need more than 2GB cache
+- Shared cache across multiple Borg UI instances
+
+**Setup on dedicated server (NAS/workstation):**
+
+```bash
+# On server with 32GB RAM
+docker run -d \
+  --name redis-cache \
+  --restart unless-stopped \
+  -p 6379:6379 \
+  -m 24g \
+  redis:7-alpine \
+  redis-server \
+  --maxmemory 20gb \
+  --maxmemory-policy allkeys-lru \
+  --save "" \
+  --appendonly no
+```
+
+**Configure in Borg UI:**
+1. Go to **Settings → Cache**
+2. Enter Redis URL: `redis://192.168.1.100:6379/0`
+3. Increase **Max Cache Size** to 20480 MB
+4. Click **Save Settings**
+
+**Verify connection:**
+```bash
+# Check Borg UI logs
+docker logs borg-web-ui | grep -i redis
+# Should show: "Archive cache initialized with external Redis backend"
+
+# Test from UI
+# Settings → Cache → Should show "Backend: Redis" and connection info
+```
+
+### Cache Statistics
+
+**View in UI:**
+- Go to **Settings → Cache**
+- Shows: backend type, hit rate, memory usage, entry count, connection info
+
+**Implementation** (`app/services/cache_service.py:270-310`):
+```python
+async def get_stats(self) -> Dict[str, Any]:
+    info = client.info("memory")
+    dbsize = client.dbsize()
+    
+    return {
+        "backend": "redis",
+        "available": True,
+        "hits": self._hits,
+        "misses": self._misses,
+        "hit_rate": (hits / total_requests * 100),
+        "size_bytes": info.get("used_memory", 0),
+        "entry_count": dbsize
+    }
+```
+
+**Monitor via Redis CLI:**
+```bash
+# Connect to Redis
+docker exec -it borg-redis redis-cli
+
+# Check memory usage
+INFO memory
+
+# Count cached archives
+DBSIZE
+
+# List all archive keys
+KEYS archive:*
+
+# Get specific archive size
+MEMORY USAGE archive:1:my-backup-2024-02-28
+```
+
+---
+
+## Operation Timeouts
+
+Configure timeouts for Borg operations to handle large repositories and slow networks.
+
+### Default Timeouts
+
+From `app/config.py:90-98` and migration `053_add_operation_timeouts.py`:
+
+| Operation | Default | Use Case |
+|-----------|---------|----------|
+| `mount_timeout` | 120s (2 min) | Archive browsing via FUSE mount |
+| `info_timeout` | 600s (10 min) | Repository info, cache building |
+| `list_timeout` | 600s (10 min) | Listing archives, archive contents |
+| `init_timeout` | 300s (5 min) | Creating new repositories |
+| `backup_timeout` | 3600s (1 hour) | Backup operations |
+| `source_size_timeout` | 3600s (1 hour) | Calculating source size with `du` |
+
+### When to Increase Timeouts
+
+**Large repositories ({">"}100,000 files):**
+- `info_timeout`: Increase to 1800s (30 min) for repositories with very large cache
+- `list_timeout`: Increase to 1800s if listing archives takes {">"}10 minutes
+
+**Slow networks (remote SSH repositories):**
+- `mount_timeout`: Increase to 300s (5 min)
+- `info_timeout`: Increase to 1800s (30 min)
+- `list_timeout`: Increase to 1800s (30 min)
+
+**Very large source directories:**
+- `source_size_timeout`: Increase to 7200s (2 hours) for 100TB+ sources
+
+### Configure Timeouts
+
+**Via Web Interface (Recommended):**
+1. Go to **Settings → System**
+2. Expand **Operation Timeouts** section
+3. Adjust timeout values
+4. Click **Save Settings**
+
+**Via Environment Variables:**
+```yaml
+# docker-compose.yml
+environment:
+  - BORG_MOUNT_TIMEOUT=300        # 5 minutes
+  - BORG_INFO_TIMEOUT=1800        # 30 minutes
+  - BORG_LIST_TIMEOUT=1800        # 30 minutes
+  - BORG_INIT_TIMEOUT=600         # 10 minutes
+  - BACKUP_TIMEOUT=7200           # 2 hours
+  - SOURCE_SIZE_TIMEOUT=7200      # 2 hours
+```
+
+<Note>
+  UI settings in database take **precedence** over environment variables (from `app/services/backup_service.py:32-72`).
+</Note>
+
+**Timeout resolution order:**
+1. Database settings (set via UI)
+2. Environment variables
+3. Config defaults
+
+---
+
+## Memory Optimization
+
+### Redis Memory Management
+
+**LRU Eviction Policy:**
+
+Redis uses `allkeys-lru` to automatically evict least-recently-used entries when `maxmemory` limit is reached.
+
+**Memory calculation:**
+```
+Archive files × 200 bytes = Approximate uncompressed size
+Compression reduces by ~70-80%
+Actual cache size ≈ (files × 200 bytes) × 0.25
+
+Examples:
+- 100,000 files  → ~20 MB → ~5 MB compressed
+- 1,000,000 files → ~200 MB → ~50 MB compressed  
+- 10,000,000 files → ~2 GB → ~500 MB compressed
+```
+
+**Set maxmemory based on usage:**
+```bash
+# For 10 archives with 1M files each
+# 10 archives × 50 MB = 500 MB (minimum)
+# Add 50% headroom = 750 MB
+# Round up to 1 GB for safety
+
+docker run -d redis:7-alpine redis-server --maxmemory 1gb --maxmemory-policy allkeys-lru
+```
+
+### In-Memory Cache Fallback
+
+**Configuration** (`app/services/cache_service.py:340-477`):
+- Default size: 2GB (configurable via `CACHE_MAX_SIZE_MB`)
+- Automatic eviction: LRU (oldest entries removed when full)
+- No persistence: Lost on restart
+
+**When fallback activates:**
+- Redis unavailable (connection refused, timeout)
+- Redis health check fails 3+ times consecutively
+- Redis URL set to `disabled`
+
+**Monitor fallback:**
+```bash
+docker logs borg-web-ui | grep "switching to in-memory cache"
+```
+
+### Browse Memory Limits
+
+**For very large archives (10M+ files):**
+
+Browsing archives with millions of files can consume significant memory during JSON parsing.
+
+**Monitor memory usage:**
+```bash
+# Check Docker container memory
+docker stats borg-web-ui
+
+# Increase container memory limit if needed
+docker run -m 4g ...  # 4GB limit
+```
+
+**Mitigation strategies:**
+1. Use Redis cache (parses once, serves from cache)
+2. Increase container memory limit
+3. Browse subdirectories instead of root
+4. Use Borg CLI for very large listings
+
+---
+
+## Backup Performance
+
+### Parallel Backups
+
+**Maximum concurrent backups:**
+```yaml
+# app/config.py default
+MAX_BACKUP_JOBS=5
+```
+
+**Increase for powerful servers:**
+```yaml
+environment:
+  - MAX_BACKUP_JOBS=10  # Allow 10 simultaneous backups
+```
+
+<Warning>
+  Too many concurrent backups can saturate I/O and network. Monitor system resources before increasing.
+</Warning>
+
+### Source Size Calculation
+
+**Purpose:** Calculate total source size before backup for accurate progress percentage and ETA.
+
+**Implementation** (`app/services/backup_service.py:433-567`):
+```python
+async def _calculate_source_size(self, source_paths: list[str], exclude_patterns: list[str] = None) -> int:
+    """Calculate total size using du command"""
+    # Local paths: du -s -B1 --exclude patterns
+    # Remote SSH: ssh user@host "du -sb --exclude patterns /remote/path"
+```
+
+**Performance impact:**
+- Local directories: Fast ({"<"}1 second for small, ~10 seconds for 1TB)
+- Remote SSH: Depends on network latency and remote disk speed
+- Very large sources (100TB+): Can take 30+ minutes
+
+**Optimization:**
+- Runs in **background** (doesn't block backup start)
+- Uses configurable timeout (`source_size_timeout`)
+- Skips if timeout exceeded (backup continues without ETA)
+
+**Disable size calculation:**
+```yaml
+# Set very low timeout to skip
+environment:
+  - SOURCE_SIZE_TIMEOUT=1  # 1 second (will timeout, backup proceeds)
+```
+
+### Compression and Deduplication
+
+**Borg compression algorithms** (set during repository creation):
+
+| Algorithm | Speed | Ratio | Use Case |
+|-----------|-------|-------|----------|
+| `none` | Fastest | 1:1 | Pre-compressed data (videos, images) |
+| `lz4` | Very fast | ~2:1 | General purpose, minimal CPU |
+| `zstd,3` | Fast | ~3:1 | Recommended default |
+| `zstd,10` | Moderate | ~4:1 | More compression, more CPU |
+| `zlib,6` | Slower | ~3.5:1 | Legacy compatibility |
+| `lzma,6` | Slowest | ~5:1 | Maximum compression |
+
+**Recommendation:**
+```bash
+# Create repository with fast compression
+borg init --encryption=repokey-blake2 --compression=zstd,3 /path/to/repo
+```
+
+**Custom flags in UI:**
+Go to **Repository → Settings → Advanced → Custom Borg Flags**:
+```
+--compression zstd,3
+```
+
+---
+
+## Network Performance
+
+### SSH Multiplexing
+
+**Enable SSH connection sharing** to speed up remote operations:
+
+```bash
+# Inside container: /home/borg/.ssh/config
+Host *
+    ControlMaster auto
+    ControlPath /tmp/ssh-%r@%h:%p
+    ControlPersist 10m
+    Compression yes
+    ServerAliveInterval 60
+    ServerAliveCountMax 3
+```
+
+**Apply configuration:**
+```bash
+docker exec borg-web-ui tee /home/borg/.ssh/config << 'EOF'
+Host *
+    ControlMaster auto
+    ControlPath /tmp/ssh-%r@%h:%p
+    ControlPersist 10m
+    Compression yes
+EOF
+
+docker exec borg-web-ui chmod 600 /home/borg/.ssh/config
+```
+
+**Benefits:**
+- Reuses SSH connections (no re-authentication overhead)
+- Faster for repositories with many small operations
+- Reduces network latency
+
+### Bandwidth Limiting
+
+**Limit backup bandwidth** for slow or metered connections:
+
+```bash
+# Repository → Settings → Advanced → Custom Borg Flags
+--remote-ratelimit 5000  # 5 MB/s upload limit
+```
+
+**Or via Borg environment:**
+```yaml
+environment:
+  - BORG_REMOTE_RATELIMIT=5000  # 5 MB/s
+```
+
+---
+
+## Database Performance
+
+### SQLite Optimization
+
+Borg UI uses SQLite for metadata storage.
+
+**Current settings:**
+- WAL mode: Enabled (concurrent reads during writes)
+- Journal mode: WAL (Write-Ahead Logging)
+- Synchronous: NORMAL (good balance of safety and speed)
+
+**Check database size:**
+```bash
+docker exec borg-web-ui ls -lh /data/borg.db
+```
+
+**Vacuum database (reclaim space):**
+```bash
+docker exec borg-web-ui sqlite3 /data/borg.db "VACUUM;"
+```
+
+**Analyze for query optimization:**
+```bash
+docker exec borg-web-ui sqlite3 /data/borg.db "ANALYZE;"
+```
+
+### Migration Performance
+
+**Database migrations run on startup** (from `app/database/migrations/__init__.py:12-55`):
+
+```python
+def run_migrations():
+    """Run all pending migrations in order"""
+    migration_files = sorted(migrations_dir.glob("[0-9][0-9][0-9]_*.py"))
+    for migration_file in migration_files:
+        migration_module.upgrade(connection)
+        connection.commit()
+```
+
+**Large databases may slow startup:**
+- 72 migrations execute sequentially
+- Each migration checks for existing columns (idempotent)
+- First startup: 5-10 seconds
+- Subsequent startups: {"<"}1 second (migrations already applied)
+
+---
+
+## Monitoring and Profiling
+
+### Performance Metrics
+
+**Cache hit rate:**
+```bash
+# Settings → Cache
+# Target: >80% hit rate for good performance
+# Less than 50% hit rate = increase cache size or TTL
+```
+
+**Backup speed:**
+```bash
+# View in job logs
+docker logs borg-web-ui | grep "Backup speed"
+
+# Example output:
+# Backup speed: 125.3 MB/s (original), 45.2 MB/s (compressed)
+```
+
+**Repository statistics:**
+```bash
+# Run from UI: Repository → Info
+# Shows: total size, unique data, compression ratio, archive count
+```
+
+### Log Analysis
+
+**Find slow operations:**
+```bash
+# Find operations greater than 10 seconds
+docker logs borg-web-ui | grep "duration" | awk '$NF > 10000'
+
+# Find timeout errors
+docker logs borg-web-ui | grep -i timeout
+```
+
+**Enable debug logging:**
+```yaml
+environment:
+  - LOG_LEVEL=DEBUG
+```
+
+<Warning>
+  Debug logging is **verbose** and may impact performance. Use only for troubleshooting.
+</Warning>
+
+---
+
+## Performance Tuning Checklist
+
+<Accordion title="Large Repository Optimization (1M+ files)">
+  
+  **Cache:**
+  - [ ] External Redis with 8-20GB memory
+  - [ ] Cache size: 8192-20480 MB
+  - [ ] Cache TTL: 1440 minutes (24 hours)
+  - [ ] Monitor hit rate {">"}80%
+  
+  **Timeouts:**
+  - [ ] `info_timeout`: 1800s (30 min)
+  - [ ] `list_timeout`: 1800s (30 min)
+  - [ ] `mount_timeout`: 300s (5 min)
+  - [ ] `source_size_timeout`: 7200s (2 hours)
+  
+  **Borg:**
+  - [ ] Compression: `zstd,3` or `lz4`
+  - [ ] Encryption: `repokey-blake2` (faster than SHA256)
+  - [ ] Regular `borg compact` to reclaim space
+  
+</Accordion>
+
+<Accordion title="Remote Repository Optimization (SSH)">
+  
+  **SSH:**
+  - [ ] SSH multiplexing enabled (`ControlMaster auto`)
+  - [ ] Compression enabled in SSH config
+  - [ ] SSH key authentication (no password delays)
+  - [ ] Dedicated backup user (no shell overhead)
+  
+  **Network:**
+  - [ ] Bandwidth limiting if needed (`--remote-ratelimit`)
+  - [ ] Consider using local mount for very large datasets
+  
+  **Timeouts:**
+  - [ ] Increase all timeouts by 2-3x for remote operations
+  - [ ] Monitor for timeout errors in logs
+  
+</Accordion>
+
+<Accordion title="Container Resource Limits">
+  
+  **Memory:**
+  - [ ] Borg UI: 2-4GB for large archive browsing
+  - [ ] Redis: Match cache size + 500MB overhead
+  
+  **CPU:**
+  - [ ] No limit for backup operations (compression benefits from all cores)
+  - [ ] Consider limiting for background jobs only
+  
+  **Example:**
+  ```yaml
+  services:
+    borg-ui:
+      deploy:
+        resources:
+          limits:
+            memory: 4G
+          reservations:
+            memory: 2G
+    
+    redis:
+      deploy:
+        resources:
+          limits:
+            memory: 20G
+          reservations:
+            memory: 10G
+  ```
+  
+</Accordion>
+
+---
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Cache Configuration" icon="database" href="/docs/cache">
+    Detailed Redis setup and troubleshooting
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/advanced/troubleshooting">
+    Performance issues and solutions
+  </Card>
+  <Card title="Maintenance" icon="screwdriver-wrench" href="/advanced/maintenance">
+    Database optimization and cleanup
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Environment variables and system settings
+  </Card>
+</CardGroup>

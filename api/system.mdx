@@ -1,0 +1,220 @@
+---
+title: 'System'
+description: 'System information, metrics, and health check endpoints'
+---
+
+## Overview
+
+System endpoints provide information about the application version, Borg version, system health, and Prometheus metrics.
+
+## Get System Info
+
+Get application and Borg version information.
+
+**Endpoint:** `GET /api/system/info`
+
+**Example Request:**
+```bash
+curl http://localhost:5000/api/system/info
+```
+
+**Response:**
+```json
+{
+  "app_version": "1.64.1",
+  "borg_version": "1.4.0"
+}
+```
+
+<ResponseField name="app_version" type="string">
+  Borg UI application version
+</ResponseField>
+
+<ResponseField name="borg_version" type="string">
+  Borg Backup version installed on the system
+</ResponseField>
+
+## Health Check
+
+Check if the API is running and healthy.
+
+**Endpoint:** `GET /health`
+
+**Authentication:** Not required
+
+**Example Request:**
+```bash
+curl http://localhost:5000/health
+```
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "service": "borg-web-ui"
+}
+```
+
+## Prometheus Metrics
+
+Export metrics in Prometheus text format for monitoring and alerting.
+
+**Endpoint:** `GET /metrics`
+
+**Authentication:** Not required (for Prometheus scraping)
+
+**Example Request:**
+```bash
+curl http://localhost:5000/metrics
+```
+
+**Response:** Prometheus text format
+```
+# Prometheus metrics for borg-ui
+# Generated at 2024-01-15T10:30:00Z
+
+# HELP borg_repository_info Repository information (always 1)
+# TYPE borg_repository_info gauge
+borg_repository_info{repository="my-backup",path="/local/backups/my-repo",type="local",mode="full"} 1
+
+# HELP borg_repository_size_bytes Repository total size in bytes
+# TYPE borg_repository_size_bytes gauge
+borg_repository_size_bytes{repository="my-backup"} 16369655808
+
+# HELP borg_repository_archive_count Number of archives in repository
+# TYPE borg_repository_archive_count gauge
+borg_repository_archive_count{repository="my-backup"} 42
+
+# HELP borg_repository_last_backup_timestamp Unix timestamp of last backup
+# TYPE borg_repository_last_backup_timestamp gauge
+borg_repository_last_backup_timestamp{repository="my-backup"} 1705311000
+
+# HELP borg_backup_jobs_total Total number of backup jobs by status
+# TYPE borg_backup_jobs_total gauge
+borg_backup_jobs_total{repository="my-backup",status="completed"} 40
+borg_backup_jobs_total{repository="my-backup",status="failed"} 2
+
+# HELP borg_backup_last_job_success Last backup job success (1=success, 0=failure)
+# TYPE borg_backup_last_job_success gauge
+borg_backup_last_job_success{repository="my-backup"} 1
+
+# HELP borg_backup_last_duration_seconds Duration of last backup job in seconds
+# TYPE borg_backup_last_duration_seconds gauge
+borg_backup_last_duration_seconds{repository="my-backup"} 930.50
+
+# HELP borg_ui_repositories_total Total number of repositories
+# TYPE borg_ui_repositories_total gauge
+borg_ui_repositories_total 3
+
+# HELP borg_ui_scheduled_jobs_total Total number of scheduled jobs
+# TYPE borg_ui_scheduled_jobs_total gauge
+borg_ui_scheduled_jobs_total 2
+
+# HELP borg_ui_scheduled_jobs_enabled Number of enabled scheduled jobs
+# TYPE borg_ui_scheduled_jobs_enabled gauge
+borg_ui_scheduled_jobs_enabled 2
+
+# HELP borg_ui_active_jobs Number of currently running jobs by type
+# TYPE borg_ui_active_jobs gauge
+borg_ui_active_jobs{type="backup"} 1
+borg_ui_active_jobs{type="restore"} 0
+borg_ui_active_jobs{type="check"} 0
+borg_ui_active_jobs{type="compact"} 0
+borg_ui_active_jobs{type="prune"} 0
+```
+
+## Available Metrics
+
+### Repository Metrics
+
+- `borg_repository_info` - Repository information (labels: repository, path, type, mode)
+- `borg_repository_size_bytes` - Total repository size in bytes
+- `borg_repository_archive_count` - Number of archives in repository
+- `borg_repository_last_backup_timestamp` - Unix timestamp of last backup
+- `borg_repository_last_check_timestamp` - Unix timestamp of last check
+- `borg_repository_last_compact_timestamp` - Unix timestamp of last compact
+
+### Backup Job Metrics
+
+- `borg_backup_jobs_total` - Total backup jobs by status (labels: repository, status)
+- `borg_backup_orphaned_jobs_total` - Jobs for deleted/renamed repositories
+- `borg_backup_last_job_success` - Last backup success (1=success, 0=failure)
+- `borg_backup_last_duration_seconds` - Duration of last backup
+- `borg_backup_last_original_size_bytes` - Original size of last backup
+- `borg_backup_last_deduplicated_size_bytes` - Deduplicated size of last backup
+
+### Restore Job Metrics
+
+- `borg_restore_jobs_total` - Total restore jobs by status
+
+### Maintenance Job Metrics
+
+- `borg_check_jobs_total` - Total check jobs by status (labels: repository, status)
+- `borg_check_last_duration_seconds` - Duration of last check
+- `borg_compact_jobs_total` - Total compact jobs by status
+- `borg_compact_last_duration_seconds` - Duration of last compact
+- `borg_prune_jobs_total` - Total prune jobs by status
+
+### System Metrics
+
+- `borg_ui_repositories_total` - Total number of repositories
+- `borg_ui_scheduled_jobs_total` - Total number of scheduled jobs
+- `borg_ui_scheduled_jobs_enabled` - Number of enabled schedules
+- `borg_ui_active_jobs` - Currently running jobs by type (labels: type)
+
+## Prometheus Configuration
+
+Add this to your `prometheus.yml`:
+
+```yaml
+scrape_configs:
+  - job_name: 'borg-ui'
+    static_configs:
+      - targets: ['localhost:5000']
+    metrics_path: '/metrics'
+    scrape_interval: 60s
+```
+
+## Grafana Dashboard
+
+Use these metrics to create Grafana dashboards with panels for:
+
+- Repository sizes over time
+- Backup success/failure rates
+- Backup durations
+- Archive counts
+- Active job monitoring
+- Storage usage trends
+
+## Example Prometheus Alerts
+
+```yaml
+groups:
+  - name: borg_backup_alerts
+    rules:
+      - alert: BackupFailed
+        expr: borg_backup_last_job_success == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Backup failed for {{ $labels.repository }}"
+          description: "Last backup job failed for repository {{ $labels.repository }}"
+
+      - alert: NoRecentBackup
+        expr: (time() - borg_repository_last_backup_timestamp) > 86400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "No backup in 24 hours for {{ $labels.repository }}"
+          description: "Repository {{ $labels.repository }} has not been backed up in over 24 hours"
+
+      - alert: RepositoryGrowing
+        expr: rate(borg_repository_size_bytes[7d]) > 1073741824
+        labels:
+          severity: info
+        annotations:
+          summary: "Repository {{ $labels.repository }} growing rapidly"
+          description: "Repository size increasing by more than 1GB per day"
+```

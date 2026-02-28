@@ -1,0 +1,818 @@
+---
+title: 'Troubleshooting'
+description: 'Common issues, error messages, and solutions for Borg UI'
+---
+
+# Troubleshooting Guide
+
+Solve common issues with backups, SSH connections, caching, and system errors.
+
+---
+
+## Authentication Issues
+
+<Accordion title="Cannot login - Invalid credentials">
+  
+  **Symptom:** Login fails with "Could not validate credentials" error.
+  
+  **Possible causes:**
+  1. Wrong username or password
+  2. User account deactivated
+  3. Database corruption
+  4. JWT token issues
+  
+  **Solutions:**
+  
+  **Reset admin password:**
+  ```bash
+  # Access database directly
+  docker exec -it borg-web-ui sqlite3 /data/borg.db
+  
+  # Check if admin user exists
+  SELECT username, is_active FROM users WHERE username='admin';
+  
+  # If user is deactivated
+  UPDATE users SET is_active=1 WHERE username='admin';
+  
+  # Exit and regenerate password
+  .quit
+  ```
+  
+  Then recreate admin user via first-run mechanism:
+  ```bash
+  # Delete admin user (will be recreated on startup)
+  docker exec borg-web-ui sqlite3 /data/borg.db "DELETE FROM users WHERE username='admin';"
+  
+  # Restart container (admin user recreated with default password)
+  docker restart borg-web-ui
+  
+  # Login with admin/admin123, change password immediately
+  ```
+  
+  **Check JWT secret key:**
+  ```bash
+  # Verify SECRET_KEY exists
+  docker exec borg-web-ui cat /data/.secret_key
+  
+  # If missing, restart to regenerate
+  docker restart borg-web-ui
+  ```
+  
+</Accordion>
+
+<Accordion title="Proxy authentication not working">
+  
+  **Symptom:** With `DISABLE_AUTHENTICATION=true`, still prompted for login.
+  
+  **Diagnosis:**
+  
+  Check environment variables:
+  ```bash
+  docker exec borg-web-ui env | grep DISABLE_AUTHENTICATION
+  # Should show: DISABLE_AUTHENTICATION=true
+  ```
+  
+  Check reverse proxy headers:
+  ```bash
+  # Test with curl
+  curl -H "X-Forwarded-User: testuser" http://localhost:8081/api/users/me
+  ```
+  
+  **Common issues:**
+  
+  **Missing header from reverse proxy:**
+  ```nginx
+  # Nginx - ensure header is passed
+  location / {
+      proxy_pass http://borg-ui:8081;
+      proxy_set_header X-Forwarded-User $remote_user;  # Required!
+  }
+  ```
+  
+  **Wrong header name:**
+  ```yaml
+  # docker-compose.yml
+  environment:
+    - DISABLE_AUTHENTICATION=true
+    - PROXY_AUTH_HEADER=Remote-User  # Match your proxy's header
+  ```
+  
+  **Security: Borg UI accessible without proxy:**
+  ```yaml
+  # Bind only to localhost
+  ports:
+    - "127.0.0.1:8081:8081"
+  ```
+  
+  **Supported headers** (from `app/core/security.py:109-120`):
+  - `X-Forwarded-User` (default)
+  - `X-Remote-User`
+  - `Remote-User`
+  - `X-authentik-username`
+  
+</Accordion>
+
+---
+
+## SSH Connection Issues
+
+<Accordion title="Permission denied (publickey)">
+  
+  **Symptom:** SSH connection test fails with "Permission denied (publickey)".
+  
+  **Diagnosis:**
+  
+  ```bash
+  # Test SSH connection manually
+  docker exec borg-web-ui ssh -vvv -i /home/borg/.ssh/id_ed25519 user@remote-host
+  
+  # Check key permissions
+  docker exec borg-web-ui ls -la /home/borg/.ssh/
+  ```
+  
+  **Common causes:**
+  
+  **1. Public key not deployed to remote server:**
+  ```bash
+  # Deploy via UI: Remote Machines → Deploy Key to Server
+  
+  # Or manually on remote server:
+  ssh user@remote-host
+  mkdir -p ~/.ssh
+  chmod 700 ~/.ssh
+  vim ~/.ssh/authorized_keys  # Paste public key
+  chmod 600 ~/.ssh/authorized_keys
+  ```
+  
+  **2. Wrong username or hostname:**
+  ```bash
+  # Verify connection details
+  # Remote Machines → Edit Connection → Check host/username/port
+  ```
+  
+  **3. SSH key file missing:**
+  ```bash
+  # Check if system key exists
+  docker exec borg-web-ui test -f /home/borg/.ssh/id_ed25519 && echo "Key exists" || echo "Key missing"
+  
+  # If missing, generate via UI:
+  # Remote Machines → Generate System Key
+  ```
+  
+  **4. Remote server permissions incorrect:**
+  ```bash
+  # On remote server
+  chmod 700 ~/.ssh
+  chmod 600 ~/.ssh/authorized_keys
+  chown -R $USER:$USER ~/.ssh
+  ```
+  
+  **5. SELinux blocking (CentOS/RHEL):**
+  ```bash
+  # On remote server
+  restorecon -R ~/.ssh
+  ```
+  
+</Accordion>
+
+<Accordion title="SSH host key verification failed">
+  
+  **Symptom:** Connection fails with "Host key verification failed".
+  
+  **Solution:**
+  
+  ```bash
+  # Accept host key manually
+  docker exec -it borg-web-ui ssh-keyscan remote-host >> /home/borg/.ssh/known_hosts
+  
+  # Or with specific port
+  docker exec -it borg-web-ui ssh-keyscan -p 2222 remote-host >> /home/borg/.ssh/known_hosts
+  
+  # Or disable host key checking (less secure)
+  docker exec borg-web-ui tee -a /home/borg/.ssh/config << 'EOF'
+  Host *
+      StrictHostKeyChecking no
+      UserKnownHostsFile=/dev/null
+  EOF
+  ```
+  
+</Accordion>
+
+<Accordion title="SSH connection timeout">
+  
+  **Symptom:** Connection test hangs or times out.
+  
+  **Diagnosis:**
+  
+  ```bash
+  # Test network connectivity
+  docker exec borg-web-ui ping -c 3 remote-host
+  
+  # Test SSH port
+  docker exec borg-web-ui nc -zv remote-host 22
+  
+  # Test with timeout
+  docker exec borg-web-ui timeout 10 ssh user@remote-host echo success
+  ```
+  
+  **Common causes:**
+  
+  **Firewall blocking SSH port:**
+  ```bash
+  # On remote server, allow SSH
+  sudo ufw allow 22/tcp
+  ```
+  
+  **Wrong port:**
+  ```bash
+  # Check actual SSH port on remote server
+  sudo netstat -tlnp | grep sshd
+  
+  # Update connection in UI with correct port
+  ```
+  
+  **Network unreachable:**
+  ```bash
+  # Verify host is reachable from Docker network
+  docker exec borg-web-ui traceroute remote-host
+  ```
+  
+</Accordion>
+
+---
+
+## Backup Failures
+
+<Accordion title="Repository lock timeout">
+  
+  **Symptom:** Backup fails with "Failed to create/acquire the lock" or "Timeout waiting for lock".
+  
+  **Cause:** Another Borg process is using the repository, or stale lock file exists.
+  
+  **Solutions:**
+  
+  **Wait for other operation to complete:**
+  ```bash
+  # Check for running Borg processes
+  docker exec borg-web-ui ps aux | grep borg
+  
+  # View active backup jobs in UI
+  # Jobs → Active Jobs → Check for running operations
+  ```
+  
+  **Break stale lock (if no operation is running):**
+  ```bash
+  # For local repository
+  docker exec borg-web-ui borg break-lock /path/to/repo
+  
+  # For SSH repository  
+  docker exec borg-web-ui borg break-lock user@host:/path/to/repo
+  ```
+  
+  <Warning>
+    Only break lock if you're **certain** no other Borg process is running. Breaking an active lock can corrupt the repository!
+  </Warning>
+  
+  **Configure bypass lock (for read operations):**
+  ```bash
+  # Repository → Settings → Advanced
+  # Enable: "Bypass lock on info operations"
+  # Enable: "Bypass lock on list operations"
+  ```
+  
+  This allows browsing archives while backups are running (from migration `061_add_bypass_lock_on_info.py` and `069_add_bypass_lock_on_list.py`).
+  
+</Accordion>
+
+<Accordion title="Backup timeout - Operation exceeded timeout">
+  
+  **Symptom:** Backup fails with timeout error after running for configured duration.
+  
+  **Solutions:**
+  
+  **Increase backup timeout:**
+  ```yaml
+  # Via UI: Settings → System → Operation Timeouts
+  # Backup timeout: 7200 (2 hours)
+  
+  # Via environment:
+  environment:
+    - BACKUP_TIMEOUT=7200
+  ```
+  
+  **Check for stuck operations:**
+  ```bash
+  # View backup progress in real-time
+  docker logs -f borg-web-ui
+  
+  # Check if backup is making progress or hung
+  docker exec borg-web-ui ps aux | grep borg
+  ```
+  
+  **Optimize backup performance:**
+  - Use faster compression: `--compression lz4`
+  - Exclude unnecessary files: `--exclude '*.tmp'`
+  - Check network speed for remote repositories
+  
+</Accordion>
+
+<Accordion title="Out of space errors">
+  
+  **Symptom:** Backup fails with "No space left on device".
+  
+  **Diagnosis:**
+  
+  ```bash
+  # Check repository disk space
+  df -h /path/to/repository
+  
+  # Check Docker volume space
+  docker exec borg-web-ui df -h /data
+  
+  # Check repository size
+  docker exec borg-web-ui borg info /path/to/repo
+  ```
+  
+  **Solutions:**
+  
+  **Run compact to reclaim space:**
+  ```bash
+  # Via UI: Repository → Maintenance → Compact Repository
+  
+  # Via CLI:
+  docker exec borg-web-ui borg compact /path/to/repo
+  ```
+  
+  **Run prune to delete old archives:**
+  ```bash
+  # Via UI: Repository → Maintenance → Prune Repository
+  # Configure retention policy (keep last 7 daily, 4 weekly, etc.)
+  ```
+  
+  **Increase repository volume size:**
+  ```bash
+  # For local repositories, ensure sufficient disk space
+  # For remote repositories, check remote server capacity
+  ```
+  
+</Accordion>
+
+<Accordion title="Pre/Post backup scripts failing">
+  
+  **Symptom:** Backup fails during pre-backup or post-backup script execution.
+  
+  **Diagnosis:**
+  
+  ```bash
+  # View script execution logs
+  # Jobs → Backup Job → Expand logs → Look for script output
+  
+  # Test script manually
+  docker exec -it borg-web-ui bash
+  # Paste script contents and run
+  ```
+  
+  **Common issues:**
+  
+  **Script timeout:**
+  ```bash
+  # Via UI: Repository → Settings → Hooks
+  # Increase: "Pre-hook timeout" or "Post-hook timeout" (default: 300s)
+  ```
+  
+  **Missing dependencies:**
+  ```bash
+  # Install required packages in container
+  docker exec borg-web-ui apk add --no-cache mysql-client  # Example
+  
+  # Or build custom image:
+  FROM ainullcode/borg-ui:latest
+  RUN apk add --no-cache mysql-client postgresql-client
+  ```
+  
+  **Incorrect permissions:**
+  ```bash
+  # Scripts run as container user (UID 1000 by default)
+  # Ensure script has access to required files/directories
+  ```
+  
+  **Script errors:**
+  ```bash
+  # Add error handling to scripts
+  set -e  # Exit on error
+  set -x  # Print commands (for debugging)
+  
+  # Example:
+  #!/bin/bash
+  set -ex
+  echo "Starting pre-backup script"
+  # Your commands here
+  ```
+  
+</Accordion>
+
+---
+
+## Cache Issues
+
+<Accordion title="Cache not working - Still slow after first browse">
+  
+  **Symptom:** Archive browsing is slow even after first load.
+  
+  **Diagnosis:**
+  
+  ```bash
+  # Check cache status in UI
+  # Settings → Cache → Backend Type (should show "Redis")
+  
+  # Check if Redis is running
+  docker ps | grep redis
+  
+  # Check Borg UI logs
+  docker logs borg-web-ui | grep -i cache
+  # Should show: "Archive cache initialized with Redis backend"
+  ```
+  
+  **Solutions:**
+  
+  **Redis not running:**
+  ```bash
+  # Start Redis container
+  docker compose up -d redis
+  
+  # Or if using standalone Redis
+  docker start redis-cache
+  ```
+  
+  **Redis connection failed:**
+  ```bash
+  # Test connection from Borg UI
+  docker exec borg-web-ui redis-cli -h redis ping
+  # Should return: PONG
+  
+  # For external Redis
+  docker exec borg-web-ui redis-cli -h 192.168.1.100 ping
+  ```
+  
+  **Fallback to in-memory cache:**
+  ```bash
+  # Check logs for fallback message
+  docker logs borg-web-ui | grep "switching to in-memory"
+  
+  # Reconfigure Redis connection
+  # Settings → Cache → External Redis URL
+  ```
+  
+  **Cache cleared or expired:**
+  ```bash
+  # Check cache TTL
+  # Settings → Cache → Cache TTL (default: 120 minutes)
+  
+  # Increase TTL for stable repositories
+  # Settings → Cache → Cache TTL: 1440 (24 hours)
+  ```
+  
+</Accordion>
+
+<Accordion title="Redis connection refused">
+  
+  **Symptom:** Logs show "Failed to connect to Redis" or "Connection refused".
+  
+  **Solutions:**
+  
+  **Check Redis is listening:**
+  ```bash
+  # For local Redis (Docker network)
+  docker exec borg-redis redis-cli ping
+  
+  # Check Redis logs
+  docker logs borg-redis
+  ```
+  
+  **Check network connectivity:**
+  ```bash
+  # Verify containers can communicate
+  docker exec borg-web-ui ping -c 3 redis
+  
+  # Check Docker network
+  docker network inspect borg-network
+  ```
+  
+  **For external Redis:**
+  ```bash
+  # Test from host machine
+  redis-cli -h 192.168.1.100 ping
+  
+  # Check firewall on Redis server
+  sudo ufw allow 6379/tcp
+  
+  # Check Redis is binding to correct interface
+  docker exec redis-cache redis-cli CONFIG GET bind
+  # Should show: 0.0.0.0 (not 127.0.0.1)
+  ```
+  
+  **Verify Redis URL format:**
+  ```bash
+  # Correct formats:
+  redis://redis:6379/0                          # Local Docker
+  redis://192.168.1.100:6379/0                  # External no password
+  redis://:password@192.168.1.100:6379/0        # External with password
+  ```
+  
+</Accordion>
+
+<Accordion title="Cache showing old data after repository changes">
+  
+  **Symptom:** Archive list or contents show outdated data after backup/prune.
+  
+  **Solution:**
+  
+  ```bash
+  # Clear cache via UI
+  # Settings → Cache → Clear All Cache
+  
+  # Or clear specific repository cache via Redis CLI
+  docker exec -it borg-redis redis-cli
+  > KEYS archive:1:*  # List all archives for repo ID 1
+  > DEL archive:1:my-old-archive  # Delete specific cache entry
+  > FLUSHDB  # Or clear entire cache
+  ```
+  
+  **Auto-clear cache after operations:**
+  - Cache is automatically cleared for a repository after prune/compact operations
+  - Implementation: `await cache_service.clear_repository(repo_id)`
+  
+</Accordion>
+
+---
+
+## Repository Issues
+
+<Accordion title="Repository not found or inaccessible">
+  
+  **Symptom:** "Repository does not exist" or "Permission denied" when accessing repository.
+  
+  **For local repositories:**
+  
+  ```bash
+  # Check if path exists
+  docker exec borg-web-ui ls -la /path/to/repo
+  
+  # Check permissions
+  docker exec borg-web-ui stat /path/to/repo
+  
+  # Verify it's a Borg repository
+  docker exec borg-web-ui test -f /path/to/repo/config && echo "Valid repo" || echo "Not a Borg repo"
+  ```
+  
+  **For SSH repositories:**
+  
+  ```bash
+  # Test SSH access
+  docker exec borg-web-ui ssh user@host ls -la /path/to/repo
+  
+  # Test with Borg
+  docker exec borg-web-ui borg list user@host:/path/to/repo
+  ```
+  
+  **Common causes:**
+  
+  1. **Typo in repository path** - Check path spelling
+  2. **Missing volume mount** - Ensure path is mounted in docker-compose.yml
+  3. **Wrong permissions** - Repository not readable by container user (UID 1000)
+  4. **SSH key not deployed** - For remote repositories
+  
+</Accordion>
+
+<Accordion title="Corrupt repository or index">
+  
+  **Symptom:** Borg errors mentioning "corrupted" or "integrity check failed".
+  
+  **Solutions:**
+  
+  <Warning>
+    Repository corruption is rare but serious. Always maintain offsite backups.
+  </Warning>
+  
+  **Run repository check:**
+  ```bash
+  # Via UI: Repository → Maintenance → Check Repository
+  
+  # Via CLI:
+  docker exec borg-web-ui borg check /path/to/repo
+  
+  # Deep check (slower, more thorough)
+  docker exec borg-web-ui borg check --verify-data /path/to/repo
+  ```
+  
+  **Repair repository:**
+  ```bash
+  # Repair with --repair flag (USE WITH CAUTION)
+  docker exec borg-web-ui borg check --repair /path/to/repo
+  ```
+  
+  **Rebuild index:**
+  ```bash
+  # If only the cache/index is corrupted
+  docker exec borg-web-ui rm -rf /home/borg/.cache/borg/*
+  docker exec borg-web-ui borg list /path/to/repo  # Rebuilds cache
+  ```
+  
+</Accordion>
+
+---
+
+## Performance Issues
+
+<Accordion title="Slow archive browsing (>30 seconds)">
+  
+  **Expected performance:**
+  - First browse: Depends on archive size (1-90 seconds)
+  - Subsequent browses: {"<"}100ms with Redis cache
+  
+  **Solutions:**
+  
+  **Enable Redis cache:**
+  ```bash
+  # Verify Redis is configured
+  # Settings → Cache → Backend Type: Redis
+  
+  # If showing "In-Memory", configure Redis:
+  # Settings → Cache → External Redis URL: redis://redis:6379/0
+  ```
+  
+  **Increase Redis memory:**
+  ```yaml
+  # docker-compose.yml
+  redis:
+    command: redis-server --maxmemory 8gb --maxmemory-policy allkeys-lru
+  ```
+  
+  **Increase cache size:**
+  ```bash
+  # Settings → Cache → Max Cache Size: 8192 MB
+  ```
+  
+  **Check cache hit rate:**
+  ```bash
+  # Settings → Cache → Hit Rate
+  # Target: >80%
+  # Less than 50% = increase TTL or cache size
+  ```
+  
+</Accordion>
+
+<Accordion title="High memory usage">
+  
+  **Symptom:** Container using excessive memory (>4GB).
+  
+  **Diagnosis:**
+  
+  ```bash
+  # Check container memory
+  docker stats borg-web-ui
+  
+  # Check Redis memory
+  docker exec borg-redis redis-cli INFO memory | grep used_memory_human
+  ```
+  
+  **Solutions:**
+  
+  **Limit Redis memory:**
+  ```yaml
+  redis:
+    command: redis-server --maxmemory 2gb --maxmemory-policy allkeys-lru
+  ```
+  
+  **Limit container memory:**
+  ```yaml
+  services:
+    borg-ui:
+      deploy:
+        resources:
+          limits:
+            memory: 4G
+  ```
+  
+  **Reduce cache size:**
+  ```bash
+  # Settings → Cache → Max Cache Size: 1024 MB
+  ```
+  
+  **Clear cache:**
+  ```bash
+  # Settings → Cache → Clear All Cache
+  ```
+  
+</Accordion>
+
+---
+
+## System Errors
+
+<Accordion title="Container fails to start">
+  
+  **Diagnosis:**
+  
+  ```bash
+  # Check container logs
+  docker logs borg-web-ui
+  
+  # Check container status
+  docker ps -a | grep borg-ui
+  ```
+  
+  **Common causes:**
+  
+  **Port already in use:**
+  ```bash
+  # Check what's using port 8081
+  sudo netstat -tlnp | grep 8081
+  
+  # Change port in docker-compose.yml
+  ports:
+    - "8082:8081"  # Use 8082 instead
+  ```
+  
+  **Volume mount permission error:**
+  ```bash
+  # Fix data directory permissions
+  sudo chown -R 1000:1000 /path/to/data
+  ```
+  
+  **Database migration failed:**
+  ```bash
+  # Check logs for migration errors
+  docker logs borg-web-ui | grep -i migration
+  
+  # Restore from backup if corrupted
+  cp /path/to/data/borg-backup.db /path/to/data/borg.db
+  ```
+  
+</Accordion>
+
+<Accordion title="Database locked errors">
+  
+  **Symptom:** "Database is locked" errors in logs.
+  
+  **Cause:** Multiple processes trying to write to SQLite simultaneously (rare with WAL mode).
+  
+  **Solutions:**
+  
+  ```bash
+  # Restart container to clear locks
+  docker restart borg-web-ui
+  
+  # Check for zombie processes
+  docker exec borg-web-ui ps aux | grep python
+  
+  # If persistent, check database integrity
+  docker exec borg-web-ui sqlite3 /data/borg.db "PRAGMA integrity_check;"
+  ```
+  
+</Accordion>
+
+---
+
+## Getting Help
+
+**When reporting issues, include:**
+
+```bash
+# 1. Version information
+docker exec borg-web-ui python -c "from app.config import settings; print(settings.app_version)"
+
+# 2. Container logs (last 100 lines)
+docker logs --tail 100 borg-web-ui > borg-ui-logs.txt
+
+# 3. System information
+docker exec borg-web-ui uname -a
+docker version
+docker compose version
+
+# 4. Configuration (redact passwords!)
+docker exec borg-web-ui env | grep -E "BORG|REDIS|SECRET" | sed 's/=.*/=REDACTED/'
+```
+
+**Community support:**
+- GitHub Issues: [Report bugs and request features](https://github.com/Ainull/borg-web-ui/issues)
+- Discussions: [Ask questions and share tips](https://github.com/Ainull/borg-web-ui/discussions)
+
+---
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Security" icon="shield" href="/advanced/security">
+    Authentication and SSH troubleshooting
+  </Card>
+  <Card title="Performance" icon="gauge" href="/advanced/performance">
+    Cache and timeout optimization
+  </Card>
+  <Card title="Maintenance" icon="screwdriver-wrench" href="/advanced/maintenance">
+    Database and log cleanup
+  </Card>
+  <Card title="SSH Keys Guide" icon="key" href="/docs/ssh-keys">
+    SSH connection setup
+  </Card>
+</CardGroup>

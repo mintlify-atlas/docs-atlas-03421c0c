@@ -1,0 +1,240 @@
+---
+title: 'Authentication'
+description: 'JWT-based authentication for the Borg UI API'
+---
+
+## Overview
+
+Borg UI uses JWT (JSON Web Token) based authentication with OAuth2 password flow. Most API endpoints require a valid access token.
+
+## Login
+
+Authenticate and obtain an access token.
+
+**Endpoint:** `POST /api/auth/login`
+
+<ParamField body="username" type="string" required>
+  Username for authentication
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Password for authentication
+</ParamField>
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/auth/login \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=admin&password=your_password"
+```
+
+**Response:**
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "bearer",
+  "expires_in": 43200,
+  "must_change_password": false
+}
+```
+
+<ResponseField name="access_token" type="string">
+  JWT access token to use for authenticated requests
+</ResponseField>
+
+<ResponseField name="token_type" type="string">
+  Always "bearer"
+</ResponseField>
+
+<ResponseField name="expires_in" type="integer">
+  Token expiration time in seconds (default: 43200 = 12 hours)
+</ResponseField>
+
+<ResponseField name="must_change_password" type="boolean">
+  If true, user must change their password before accessing other endpoints
+</ResponseField>
+
+## Using the Token
+
+Include the access token in the `Authorization` header:
+
+```bash
+curl http://localhost:5000/api/repositories \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+## Get Current User
+
+Retrieve information about the authenticated user.
+
+**Endpoint:** `GET /api/auth/me`
+
+**Example Request:**
+```bash
+curl http://localhost:5000/api/auth/me \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "id": 1,
+  "username": "admin",
+  "email": "admin@example.com",
+  "is_active": true,
+  "is_admin": true,
+  "must_change_password": false,
+  "last_login": "2024-01-15T10:30:00Z",
+  "created_at": "2024-01-01T00:00:00Z"
+}
+```
+
+## Refresh Token
+
+Obtain a new access token before the current one expires.
+
+**Endpoint:** `POST /api/auth/refresh`
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/auth/refresh \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "bearer",
+  "expires_in": 43200
+}
+```
+
+## Logout
+
+Invalidate the current session (client should discard the token).
+
+**Endpoint:** `POST /api/auth/logout`
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/auth/logout \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "message": "Successfully logged out"
+}
+```
+
+## Change Password
+
+Change the current user's password.
+
+**Endpoint:** `POST /api/auth/change-password`
+
+<ParamField body="current_password" type="string" required>
+  Current password
+</ParamField>
+
+<ParamField body="new_password" type="string" required>
+  New password to set
+</ParamField>
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/auth/change-password \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "current_password": "old_password",
+    "new_password": "new_secure_password"
+  }'
+```
+
+**Response:**
+```json
+{
+  "message": "Password changed successfully"
+}
+```
+
+## Authentication Configuration
+
+Get authentication configuration for the UI.
+
+**Endpoint:** `GET /api/auth/config`
+
+**Example Request:**
+```bash
+curl http://localhost:5000/api/auth/config
+```
+
+**Response:**
+```json
+{
+  "proxy_auth_enabled": false,
+  "authentication_required": true
+}
+```
+
+## User Management (Admin Only)
+
+### List Users
+
+**Endpoint:** `GET /api/auth/users`
+
+**Example Request:**
+```bash
+curl http://localhost:5000/api/auth/users \
+  -H "Authorization: Bearer YOUR_ADMIN_TOKEN"
+```
+
+### Create User
+
+**Endpoint:** `POST /api/auth/users`
+
+<ParamField body="username" type="string" required>
+  Username for the new user
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Password for the new user
+</ParamField>
+
+<ParamField body="email" type="string">
+  Email address
+</ParamField>
+
+<ParamField body="is_admin" type="boolean" default={false}>
+  Whether user has admin privileges
+</ParamField>
+
+**Example Request:**
+```bash
+curl -X POST http://localhost:5000/api/auth/users \
+  -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "newuser",
+    "password": "secure_password",
+    "email": "user@example.com",
+    "is_admin": false
+  }'
+```
+
+### Update User
+
+**Endpoint:** `PUT /api/auth/users/{user_id}`
+
+### Delete User
+
+**Endpoint:** `DELETE /api/auth/users/{user_id}`
+
+**Example Request:**
+```bash
+curl -X DELETE http://localhost:5000/api/auth/users/2 \
+  -H "Authorization: Bearer YOUR_ADMIN_TOKEN"
+```

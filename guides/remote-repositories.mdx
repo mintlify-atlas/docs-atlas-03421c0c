@@ -1,0 +1,468 @@
+---
+title: 'Setting Up Remote Repositories'
+description: 'Configure SSH/SFTP remote storage for secure offsite backups'
+---
+
+## Overview
+
+Borg UI supports backing up to remote repositories over SSH, enabling secure offsite backups to:
+- Dedicated backup servers
+- Cloud storage with SSH access (Hetzner Storage Box, rsync.net)
+- NAS devices (Synology, QNAP)
+- Remote Linux servers
+
+## SSH Key Management
+
+Borg UI uses a single system SSH key for all remote connections. This simplifies key management and deployment.
+
+### Generate System SSH Key
+
+<Steps>
+  <Step title="Navigate to SSH Keys">
+    Click **SSH Keys** in the sidebar to access SSH key management.
+  </Step>
+
+  <Step title="Generate New Key">
+    Click **Generate System SSH Key** and configure:
+
+    - **Key Name**: "System SSH Key" (default)
+    - **Key Type**: Choose algorithm
+      - `ed25519`: Modern, fast, secure (recommended)
+      - `rsa`: Compatible with older systems
+      - `ecdsa`: Alternative modern algorithm
+    - **Description**: Optional note about the key
+  </Step>
+
+  <Step title="Save the Key">
+    Click **Generate** to create the key pair.
+
+    <Warning>
+    Only one system SSH key is allowed. Delete the existing key if you need to generate a new one.
+    </Warning>
+  </Step>
+
+  <Step title="Copy Public Key">
+    The public key is displayed after generation. Copy it for deployment to remote servers.
+  </Step>
+</Steps>
+
+### Import Existing SSH Key
+
+If you already have an SSH key:
+
+1. Click **Import System SSH Key**
+2. Provide paths to key files:
+   - **Private Key Path**: `/local/ssh/id_ed25519`
+   - **Public Key Path**: `/local/ssh/id_ed25519.pub` (auto-detected)
+3. Enter a name and description
+4. Click **Import**
+
+<Tip>
+Mount your host's SSH directory to access existing keys:
+```yaml
+volumes:
+  - ~/.ssh:/local/ssh:ro
+```
+</Tip>
+
+## Setting Up SSH Connections
+
+SSH connections define remote servers where you can store repositories or backup data from.
+
+### Quick Setup (Automated)
+
+The quickest way to set up a remote connection:
+
+<Steps>
+  <Step title="Open Quick Setup">
+    From the SSH Keys page, click **Quick Setup** to open the wizard.
+  </Step>
+
+  <Step title="Configure Connection">
+    Fill in the remote server details:
+
+    - **Connection Name**: Friendly name (e.g., "Hetzner Storage")
+    - **Host**: Server hostname or IP address
+    - **Username**: SSH username
+    - **Port**: SSH port (default: 22)
+    - **Password**: Used only for key deployment
+    - **Default Path**: Starting directory (e.g., `/` for Hetzner)
+    - **SSH Path Prefix**: Path prepended to SSH commands (Synology: `/volume1`)
+    - **SFTP Mode**: Enable for Hetzner/restricted shells, disable for Synology
+  </Step>
+
+  <Step title="Deploy Key">
+    Click **Setup** to:
+    1. Generate or use existing system SSH key
+    2. Deploy public key to remote server using `ssh-copy-id`
+    3. Test the connection
+    4. Save connection details
+
+    <Note>
+    The password is used only during setup and is not stored.
+    </Note>
+  </Step>
+</Steps>
+
+### Manual Setup
+
+For greater control or when automated deployment fails:
+
+<Steps>
+  <Step title="Create SSH Connection">
+    Navigate to **SSH Connections** and click **Add Connection**.
+  </Step>
+
+  <Step title="Enter Connection Details">
+    - **Host**: Remote server address
+    - **Username**: SSH username
+    - **Port**: SSH port (default: 22)
+    - **Default Path**: Starting directory for browsing
+    - **SSH Path Prefix**: Path prefix for commands (see platform notes)
+    - **Mount Point**: Logical name (e.g., `/hetzner`, `/nas`)
+  </Step>
+
+  <Step title="Deploy Key Manually">
+    Copy the system public key from **SSH Keys** page, then on the remote server:
+
+    ```bash
+    # On remote server
+    mkdir -p ~/.ssh
+    echo "ssh-ed25519 AAAAC3..." >> ~/.ssh/authorized_keys
+    chmod 700 ~/.ssh
+    chmod 600 ~/.ssh/authorized_keys
+    ```
+  </Step>
+
+  <Step title="Test Connection">
+    Back in Borg UI, click **Test** to verify the connection works.
+
+    Status will update to:
+    - **Connected**: Authentication successful
+    - **Failed**: Check logs for error details
+  </Step>
+</Steps>
+
+## Platform-Specific Configuration
+
+### Hetzner Storage Box
+
+```yaml
+Host: uXXXXXX.your-storagebox.de
+Username: uXXXXXX
+Port: 23 (or 22)
+Default Path: /
+SSH Path Prefix: (leave empty)
+SFTP Mode: Enabled
+```
+
+<Note>
+Hetzner Storage Box uses a restricted shell. SFTP mode must be enabled for key deployment.
+</Note>
+
+### Synology NAS
+
+```yaml
+Host: 192.168.1.100
+Username: admin
+Port: 22
+Default Path: /volume1/backups
+SSH Path Prefix: /volume1
+SFTP Mode: Disabled
+```
+
+<Warning>
+Synology requires SSH Path Prefix because Borg commands need the full path, but SFTP browsing uses relative paths.
+</Warning>
+
+### rsync.net
+
+```yaml
+Host: zh1234.rsync.net
+Username: zh1234
+Port: 22
+Default Path: /
+SSH Path Prefix: (leave empty)
+SFTP Mode: Enabled
+```
+
+### Generic Linux Server
+
+```yaml
+Host: backup.example.com
+Username: borguser
+Port: 22
+Default Path: /home/borguser
+SSH Path Prefix: (leave empty)
+SFTP Mode: Enabled
+```
+
+## Creating Remote Repository
+
+Once the SSH connection is established:
+
+<Steps>
+  <Step title="Create Repository">
+    Navigate to **Repositories** → **Create Repository**.
+  </Step>
+
+  <Step title="Select SSH Connection">
+    - **Connection**: Choose your SSH connection from the dropdown
+    - **Path**: Remote path for repository (e.g., `/backups/my-repo`)
+
+    <Tip>
+    The full SSH URL is automatically constructed:
+    ```
+    ssh://username@host:port/path
+    ```
+    </Tip>
+  </Step>
+
+  <Step title="Configure Repository">
+    - **Name**: Friendly name
+    - **Encryption**: `repokey` or `keyfile`
+    - **Passphrase**: Encryption password
+    - **Compression**: `lz4` (recommended for remote)
+    - **Source Directories**: Local paths to back up
+    - **Exclude Patterns**: Files to skip
+  </Step>
+
+  <Step title="Initialize Repository">
+    Click **Create** to initialize the remote repository.
+
+    Borg UI will:
+    1. Connect via SSH
+    2. Create the repository directory
+    3. Initialize Borg repository structure
+    4. Store encryption keys
+  </Step>
+</Steps>
+
+## Remote Path Prefix Explained
+
+The **SSH Path Prefix** handles differences between SFTP and SSH command paths:
+
+```plaintext
+User Path: /backups/repo
+SSH Path Prefix: /volume1
+
+SFTP Browse: /backups/repo (as entered)
+SSH Command: /volume1/backups/repo (prefix added)
+```
+
+This is required for:
+- **Synology NAS**: Volumes like `/volume1`, `/volume2`
+- **QNAP NAS**: Share paths like `/share/backups`
+- Any system where Borg commands need absolute paths different from SFTP paths
+
+<Note>
+Leave SSH Path Prefix empty for standard Linux servers and Hetzner Storage Box.
+</Note>
+
+## Importing Existing Remote Repository
+
+If you have an existing Borg repository on a remote server:
+
+<Steps>
+  <Step title="Select Import">
+    Navigate to **Repositories** → **Import Repository**.
+  </Step>
+
+  <Step title="Choose Connection">
+    - **Connection**: Select SSH connection
+    - **Path**: Remote repository path
+  </Step>
+
+  <Step title="Provide Credentials">
+    - **Encryption Passphrase**: Required for encrypted repos
+    - **Compression**: Set default for future backups
+  </Step>
+
+  <Step title="Upload Keyfile (if needed)">
+    For `keyfile` or `keyfile-blake2` encryption:
+
+    1. Import the repository first
+    2. Navigate to repository details
+    3. Click **Upload Keyfile**
+    4. Select the keyfile from your local machine
+  </Step>
+
+  <Step title="Import Repository">
+    Click **Import** to add the repository to Borg UI.
+
+    The system will:
+    - Verify repository accessibility
+    - Read repository metadata
+    - List existing archives
+    - Update statistics
+  </Step>
+</Steps>
+
+## Storage Information
+
+Borg UI can display remote storage usage:
+
+1. Navigate to **SSH Connections**
+2. Click **Refresh Storage** on a connection
+3. View:
+   - Total storage
+   - Used space
+   - Available space
+   - Usage percentage
+
+<Tip>
+Storage information is collected using the `df` command on the remote server.
+</Tip>
+
+## Browse Remote Files
+
+You can browse remote filesystems to select backup sources:
+
+1. Create or edit a repository
+2. In **Source Directories**, click **Browse Remote**
+3. Select the SSH connection
+4. Navigate the remote filesystem
+5. Select directories to back up
+
+<Note>
+Only available for repositories with associated SSH connections.
+</Note>
+
+## Troubleshooting
+
+### Connection Test Fails
+
+**Check SSH key deployment:**
+```bash
+# On remote server, verify key is present
+cat ~/.ssh/authorized_keys | grep "ssh-ed25519"
+```
+
+**Check permissions:**
+```bash
+chmod 700 ~/.ssh
+chmod 600 ~/.ssh/authorized_keys
+```
+
+**Test manually:**
+```bash
+# From Borg UI container
+docker exec -it borg-ui bash
+ssh -i /home/borg/.ssh/id_ed25519 user@host
+```
+
+### Borg Init Fails on Remote
+
+**Ensure Borg is installed on remote server:**
+```bash
+ssh user@host "which borg"
+```
+
+If Borg is in a non-standard location, set **Remote Path** in repository settings:
+```
+/usr/local/bin/borg
+```
+
+### Hetzner Storage Box: Permission Denied
+
+1. Enable SSH access in Hetzner control panel
+2. Use port 23 (or 22, depending on configuration)
+3. Ensure SFTP mode is enabled
+4. Username must match storage box username
+
+### Synology: Key Deployment Fails
+
+1. Disable SFTP mode for Synology
+2. Ensure SSH service is enabled in Synology control panel
+3. User must be in `administrators` group
+4. Set SSH Path Prefix to `/volume1` (or your volume name)
+
+### Repository Path Not Found
+
+**Check if parent directory exists:**
+```bash
+ssh user@host "ls -la /path/to/parent"
+```
+
+**Create directory manually if needed:**
+```bash
+ssh user@host "mkdir -p /path/to/repo"
+```
+
+## Performance Considerations
+
+### Network Speed
+
+Remote backups are limited by network bandwidth:
+- **LAN**: 100+ MB/s (fast)
+- **Internet**: 10-50 MB/s (typical residential upload)
+- **Cloud**: Varies by provider and plan
+
+<Tip>
+Use `lz4` compression for remote backups. It reduces network transfer with minimal CPU overhead.
+</Tip>
+
+### First Backup
+
+Initial backups to remote repositories take longer:
+- All data must be uploaded
+- Network latency affects performance
+- Consider running first backup during off-hours
+
+### Subsequent Backups
+
+Borg's deduplication minimizes remote transfer:
+- Only changed blocks are uploaded
+- Typical incremental backups are small
+- Deduplication works across all archives
+
+## Security Best Practices
+
+<AccordionGroup>
+  <Accordion title="Use Strong Passphrases">
+    - Minimum 20 characters
+    - Mix of letters, numbers, symbols
+    - Store in password manager
+    - Never reuse passphrases
+  </Accordion>
+
+  <Accordion title="Restrict SSH Access">
+    On remote server, create dedicated user:
+    ```bash
+    useradd -m -s /bin/bash borguser
+    mkdir -p /home/borguser/.ssh
+    # Add public key to authorized_keys
+    ```
+
+    Restrict to Borg commands only (advanced):
+    ```bash
+    # In ~/.ssh/authorized_keys
+    command="borg serve --restrict-to-path /backups" ssh-ed25519 AAAA...
+    ```
+  </Accordion>
+
+  <Accordion title="Firewall Configuration">
+    - Open only SSH port (22 or custom)
+    - Use fail2ban to prevent brute force
+    - Consider VPN for extra security
+  </Accordion>
+
+  <Accordion title="Backup Keyfiles">
+    For `keyfile` encryption:
+    1. Download keyfile from Borg UI
+    2. Store in secure location (password manager, USB drive)
+    3. Keep offline backup
+    4. Never lose keyfile - data is unrecoverable without it
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Schedule Remote Backups" icon="clock" href="/guides/scheduling-backups">
+    Automate backups to remote storage
+  </Card>
+  <Card title="Monitor Backups" icon="chart-line" href="/features/notifications">
+    Get alerts for remote backup status
+  </Card>
+</CardGroup>

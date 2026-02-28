@@ -1,0 +1,607 @@
+---
+title: 'Docker Compose Deployment'
+description: 'Deploy Borg UI with Docker Compose (recommended method)'
+icon: 'layer-group'
+---
+
+## Overview
+
+Docker Compose is the recommended deployment method for Borg UI. It provides:
+
+- Automatic Redis setup for 600x faster archive browsing
+- Persistent volumes for data and cache
+- Health checks and automatic restarts
+- Easy configuration via `.env` file
+- Service dependencies and networking
+
+## Quick Start
+
+<Steps>
+
+<Step title="Create docker-compose.yml">
+Create a `docker-compose.yml` file:
+
+```yaml
+services:
+  app:
+    image: ainullcode/borg-ui:latest
+    container_name: borg-web-ui
+    restart: unless-stopped
+    privileged: true  # Required only for remote-to-remote backups via SSHFS
+
+    ports:
+      - "${PORT:-8081}:${PORT:-8081}"
+
+    volumes:
+      - borg_data:/data
+      - borg_cache:/home/borg/.cache/borg
+      - /etc/localtime:/etc/localtime:ro
+      - /home/yourusername:/local:rw  # Replace with your directory
+
+    environment:
+      - PORT=${PORT:-8081}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - PUID=${PUID:-1001}
+      - PGID=${PGID:-1001}
+      - TZ=${TZ:-}
+      - LOCAL_MOUNT_POINTS=${LOCAL_MOUNT_POINTS:-/local}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - CACHE_TTL_SECONDS=7200
+      - CACHE_MAX_SIZE_MB=2048
+
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:$${PORT:-8081}/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    networks:
+      - borg_network
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    container_name: borg-redis
+    restart: unless-stopped
+
+    command: >
+      redis-server
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --appendonly no
+
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+    networks:
+      - borg_network
+
+networks:
+  borg_network:
+    driver: bridge
+
+volumes:
+  borg_data:
+    driver: local
+  borg_cache:
+    driver: local
+```
+
+<Warning>
+Replace `/home/yourusername` with the actual directory you want to backup.
+</Warning>
+</Step>
+
+<Step title="Create .env file (optional)">
+Create a `.env` file in the same directory to customize settings:
+
+```bash
+# Port configuration
+PORT=8081
+
+# Environment mode
+ENVIRONMENT=production
+
+# User/Group IDs (run: id -u && id -g)
+PUID=1001
+PGID=1001
+
+# Timezone
+TZ=America/New_York
+
+# Redis port
+REDIS_PORT=6379
+```
+</Step>
+
+<Step title="Start the services">
+```bash
+docker-compose up -d
+```
+</Step>
+
+<Step title="Verify it's running">
+```bash
+docker-compose ps
+```
+
+Access the web interface at `http://localhost:8081`
+
+Default credentials: `admin` / `admin123`
+</Step>
+
+</Steps>
+
+## Configuration
+
+### Volume Mounts
+
+#### Application Data
+
+```yaml
+- borg_data:/data
+```
+
+Stores all persistent application data:
+- SQLite database
+- SSH keys and Borg encryption keys
+- Configuration files
+- Logs
+- Auto-generated `SECRET_KEY`
+
+#### Borg Cache
+
+```yaml
+- borg_cache:/home/borg/.cache/borg
+```
+
+Improves backup performance by caching repository metadata.
+
+#### Host Filesystem
+
+<CodeGroup>
+
+```yaml Single directory
+volumes:
+  - /home/username:/local:rw
+environment:
+  - LOCAL_MOUNT_POINTS=/local
+```
+
+```yaml Multiple directories
+volumes:
+  - /home/username:/home:rw
+  - /var/www:/www:ro
+  - /mnt/data:/data:rw
+environment:
+  - LOCAL_MOUNT_POINTS=/home,/www,/data
+```
+
+```yaml Entire root filesystem
+volumes:
+  - /:/local:rw
+environment:
+  - LOCAL_MOUNT_POINTS=/local
+```
+
+</CodeGroup>
+
+<Warning>
+Mounting the entire root filesystem (`/`) should only be used for development/testing. In production, mount only the directories you need to backup.
+</Warning>
+
+#### Docker Socket (Optional)
+
+```yaml
+- /var/run/docker.sock:/var/run/docker.sock:rw
+```
+
+Required only for stopping/starting Docker containers during backups via pre/post backup scripts.
+
+### Environment Variables
+
+#### Core Settings
+
+```yaml
+environment:
+  - PORT=8081
+  - ENVIRONMENT=production
+  - LOG_LEVEL=INFO
+```
+
+#### User/Group IDs
+
+```yaml
+- PUID=1001  # Run: id -u
+- PGID=1001  # Run: id -g
+```
+
+Set these to match your host user for proper file permissions.
+
+#### Timezone
+
+```yaml
+- TZ=America/New_York
+```
+
+Ensures correct timestamps in backup archives and logs.
+
+#### Security
+
+```yaml
+- INITIAL_ADMIN_PASSWORD=MySecurePassword123!
+- SECRET_KEY=your-custom-secret-key-here
+```
+
+<Info>
+If `SECRET_KEY` is not set, it will be auto-generated and persisted to `/data/.secret_key`.
+</Info>
+
+#### Redis Cache
+
+```yaml
+- REDIS_HOST=redis
+- REDIS_PORT=6379
+- REDIS_DB=0
+- CACHE_TTL_SECONDS=7200    # 2 hours
+- CACHE_MAX_SIZE_MB=2048    # 2GB
+```
+
+Provides 600x faster archive browsing for large repositories.
+
+#### Borg Timeouts
+
+For large repositories with long cache build times:
+
+```yaml
+- BORG_INFO_TIMEOUT=7200     # 2 hours for initial cache build
+- BORG_LIST_TIMEOUT=600      # 10 minutes
+- BORG_INIT_TIMEOUT=300      # 5 minutes
+- BORG_EXTRACT_TIMEOUT=3600  # 1 hour
+- SCRIPT_TIMEOUT=120         # 2 minutes
+```
+
+#### Disable Authentication
+
+```yaml
+- DISABLE_AUTHENTICATION=true
+```
+
+<Warning>
+Only use this in secure, private networks. Not recommended for production.
+</Warning>
+
+### Privileged Mode
+
+```yaml
+privileged: true
+```
+
+<Info>
+Privileged mode is required **only** for remote-to-remote backups via SSHFS. If you only use local or direct SSH backups, you can remove this line.
+</Info>
+
+This allows mounting remote SSH locations as local filesystems using SSHFS.
+
+### Redis Configuration
+
+The included Redis service is configured for optimal caching:
+
+```yaml
+command: >
+  redis-server
+  --maxmemory 2gb
+  --maxmemory-policy allkeys-lru
+  --save ""
+  --appendonly no
+```
+
+- **maxmemory**: Limits Redis memory usage to 2GB
+- **allkeys-lru**: Evicts least recently used keys when memory limit is reached
+- **save ""**: Disables persistence (cache data doesn't need to survive restarts)
+- **appendonly no**: Disables append-only file for better performance
+
+#### Using External Redis
+
+To use an external Redis instance:
+
+```yaml
+environment:
+  - REDIS_URL=redis://192.168.1.100:6379/0
+```
+
+Or remove the `REDIS_URL` and set individual parameters:
+
+```yaml
+environment:
+  - REDIS_HOST=192.168.1.100
+  - REDIS_PORT=6379
+  - REDIS_DB=0
+```
+
+Then remove the `redis` service from your docker-compose.yml.
+
+## Management Commands
+
+### Start services
+
+```bash
+docker-compose up -d
+```
+
+### Stop services
+
+```bash
+docker-compose down
+```
+
+### View logs
+
+<CodeGroup>
+
+```bash All services
+docker-compose logs -f
+```
+
+```bash Specific service
+docker-compose logs -f app
+docker-compose logs -f redis
+```
+
+```bash Last 100 lines
+docker-compose logs --tail=100 app
+```
+
+</CodeGroup>
+
+### Restart services
+
+```bash
+docker-compose restart
+```
+
+### Check service status
+
+```bash
+docker-compose ps
+```
+
+### Update to latest version
+
+<Steps>
+
+<Step title="Pull latest images">
+```bash
+docker-compose pull
+```
+</Step>
+
+<Step title="Recreate containers">
+```bash
+docker-compose up -d
+```
+</Step>
+
+<Step title="Remove old images">
+```bash
+docker image prune
+```
+</Step>
+
+</Steps>
+
+### Rebuild from source
+
+If using the build context instead of pre-built images:
+
+```yaml
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+      args:
+        - APP_VERSION=${APP_VERSION:-local-dev}
+```
+
+Then rebuild:
+
+```bash
+docker-compose up -d --build
+```
+
+### Access container shell
+
+```bash
+docker-compose exec app bash
+```
+
+### View resource usage
+
+```bash
+docker-compose stats
+```
+
+## Production Example
+
+Complete production-ready configuration:
+
+```yaml docker-compose.yml
+services:
+  app:
+    image: ainullcode/borg-ui:latest
+    container_name: borg-web-ui
+    restart: unless-stopped
+
+    ports:
+      - "8081:8081"
+
+    volumes:
+      - borg_data:/data
+      - borg_cache:/home/borg/.cache/borg
+      - /etc/localtime:/etc/localtime:ro
+      - /home/user:/home:rw
+      - /var/www:/www:ro
+      - /mnt/backups:/backups:rw
+
+    environment:
+      - PORT=8081
+      - ENVIRONMENT=production
+      - PUID=1001
+      - PGID=1001
+      - TZ=America/New_York
+      - LOCAL_MOUNT_POINTS=/home,/www,/backups
+      - INITIAL_ADMIN_PASSWORD=ChangeThisSecurePassword123!
+      - LOG_LEVEL=INFO
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - CACHE_TTL_SECONDS=7200
+      - CACHE_MAX_SIZE_MB=2048
+      - BORG_INFO_TIMEOUT=7200
+      - BORG_LIST_TIMEOUT=600
+
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:8081/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    networks:
+      - borg_network
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    container_name: borg-redis
+    restart: unless-stopped
+
+    command: >
+      redis-server
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --appendonly no
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+    networks:
+      - borg_network
+
+networks:
+  borg_network:
+    driver: bridge
+
+volumes:
+  borg_data:
+    driver: local
+  borg_cache:
+    driver: local
+```
+
+```bash .env
+PORT=8081
+ENVIRONMENT=production
+PUID=1001
+PGID=1001
+TZ=America/New_York
+```
+
+## Troubleshooting
+
+### Services not starting
+
+Check logs for errors:
+
+```bash
+docker-compose logs app
+```
+
+### Redis connection issues
+
+Verify Redis is healthy:
+
+```bash
+docker-compose ps redis
+docker-compose logs redis
+```
+
+Test Redis connection:
+
+```bash
+docker-compose exec redis redis-cli ping
+```
+
+### Permission issues
+
+1. Check PUID/PGID match your host user:
+   ```bash
+   id -u && id -g
+   ```
+
+2. Update `.env` file with correct values
+
+3. Recreate containers:
+   ```bash
+   docker-compose down
+   docker-compose up -d
+   ```
+
+### Port conflicts
+
+If port 8081 is already in use, change it in `.env`:
+
+```bash
+PORT=8082
+```
+
+Then restart:
+
+```bash
+docker-compose down
+docker-compose up -d
+```
+
+### Health check failures
+
+Increase start_period for slower systems:
+
+```yaml
+healthcheck:
+  start_period: 60s  # Increase from 40s
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Reverse Proxy" icon="network-wired" href="/deployment/reverse-proxy">
+    Run behind Nginx or Traefik with SSL
+  </Card>
+  <Card title="Unraid" icon="server" href="/deployment/unraid">
+    Deploy on Unraid with Community Applications
+  </Card>
+</CardGroup>
